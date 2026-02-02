@@ -53,6 +53,9 @@ export async function POST(req: Request) {
       success: boolean;
       response?: string;
       steps?: unknown[];
+      standup?: { messages: unknown[]; totalCost: number };
+      agentMessages?: unknown[];
+      adaptations?: unknown[];
       error?: string;
       runId?: string;
     }>((resolve) => {
@@ -95,7 +98,7 @@ export async function POST(req: Request) {
           conversationId: conversation.id,
           role: "assistant",
           content: result.response,
-          metadata: JSON.stringify({ steps: result.steps }),
+          metadata: JSON.stringify({ steps: result.steps, standup: result.standup, agentMessages: result.agentMessages, adaptations: result.adaptations }),
         },
       });
 
@@ -107,6 +110,9 @@ export async function POST(req: Request) {
       return NextResponse.json({
         response: result.response,
         steps: result.steps,
+        standup: result.standup,
+        agentMessages: result.agentMessages,
+        adaptations: result.adaptations,
         conversationId: conversation.id,
         runId: result.runId ?? runId,
       });

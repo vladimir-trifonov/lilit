@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback } from "react";
 import { Chat } from "@/components/chat";
 import { ProjectSelector } from "@/components/project-selector";
 import { ProviderAlert } from "@/components/provider-alert";
+import { SplashScreen } from "@/components/splash-screen";
 import { Button } from "@/components/ui/button";
 import { ChevronsLeft, ChevronsRight } from "lucide-react";
 
@@ -15,12 +16,19 @@ interface Project {
 }
 
 const ACTIVE_PROJECT_KEY = "lilit-active-project";
+const SPLASH_SEEN_KEY = "lilit-splash-seen";
 
 export default function Home() {
   const [projects, setProjects] = useState<Project[]>([]);
   const [activeProject, setActiveProject] = useState<Project | null>(null);
   const [isCollapsed, setIsCollapsed] = useState(false);
   const [runningProjectIds, setRunningProjectIds] = useState<Set<string>>(new Set());
+  const [splashDone, setSplashDone] = useState(() => {
+    if (typeof window !== "undefined") {
+      return localStorage.getItem(SPLASH_SEEN_KEY) === "1";
+    }
+    return false;
+  });
 
   // Load projects and restore active project from localStorage
   useEffect(() => {
@@ -69,7 +77,14 @@ export default function Home() {
     };
   }, []);
 
+  const handleSplashComplete = useCallback(() => {
+    setSplashDone(true);
+    localStorage.setItem(SPLASH_SEEN_KEY, "1");
+  }, []);
+
   return (
+    <>
+    {!splashDone && <SplashScreen onComplete={handleSplashComplete} />}
     <div className="flex h-screen bg-background text-foreground font-sans overflow-hidden">
       {/* Sidebar */}
       <div
@@ -141,5 +156,6 @@ export default function Home() {
         </div>
       </div>
     </div>
+    </>
   );
 }

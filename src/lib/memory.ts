@@ -5,6 +5,7 @@
 
 import { prisma } from "./prisma";
 import { generateEmbedding } from "./embeddings";
+import { AGENT } from "@/lib/models";
 
 // --- Types ---
 
@@ -224,10 +225,10 @@ export function getMemoryTypesForAgent(
   agent: string,
   role?: string
 ): string[] {
-  if (agent === "pm") return ["decision", "code_pattern"];
-  if (agent === "architect") return ["decision", "code_pattern"];
-  if (agent === "developer" && role === "review") return ["code_pattern", "decision"];
-  if (agent === "developer") return ["code_pattern", "decision", "personality"];
-  if (agent === "qa") return ["code_pattern", "decision"];
+  if (agent === AGENT.PM) return ["decision", "code_pattern"];
+  if (agent === AGENT.ARCHITECT) return ["decision", "code_pattern"];
+  if (agent === AGENT.DEVELOPER && role === "review") return ["code_pattern", "decision"];
+  if (agent === AGENT.DEVELOPER) return ["code_pattern", "decision", "personality"];
+  if (agent === AGENT.QA) return ["code_pattern", "decision"];
   return ["decision", "code_pattern"];
 }

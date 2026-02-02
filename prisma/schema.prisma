@@ -109,10 +109,52 @@ model PipelineRun {
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
-  agentRuns      AgentRun[]
+  agentRuns        AgentRun[]
+  standupMessages  StandupMessage[]
+  agentMessages    AgentMessage[]
 
   @@index([projectId, status])
   @@index([runId])
+}
+
+model StandupMessage {
+  id             String      @id @default(cuid())
+  pipelineRunId  String
+  pipelineRun    PipelineRun @relation(fields: [pipelineRunId], references: [id], onDelete: Cascade)
+  fromAgent      String      // "pm" | "architect" | "developer" | "qa"
+  fromRole       String?
+  toAgent        String      // recipient agent type or "none"
+  insightType    String      // "cross-concern" | "pattern" | "process" | "drift" | "risk" | "none"
+  message        String
+  actionable     Boolean     @default(false)
+  feedback       String?     // "useful" | "not_useful" — user quality rating
+  model          String
+  costUsd        Float?
+  tokensUsed     Int?
+  createdAt      DateTime    @default(now())
+
+  @@index([pipelineRunId])
+  @@index([insightType])
+  @@index([fromAgent])
+}
+
+model AgentMessage {
+  id             String         @id @default(cuid())
+  pipelineRunId  String
+  pipelineRun    PipelineRun    @relation(fields: [pipelineRunId], references: [id], onDelete: Cascade)
+  fromAgent      String         // sender agent type
+  fromRole       String?
+  toAgent        String         // recipient agent type
+  messageType    String         // "question" | "flag" | "suggestion" | "handoff" | "response"
+  content        String
+  phase          Int            // pipeline step index when message was sent
+  parentId       String?        // reply-to message ID (threaded conversations)
+  parent         AgentMessage?  @relation("MessageThread", fields: [parentId], references: [id])
+  replies        AgentMessage[] @relation("MessageThread")
+  createdAt      DateTime       @default(now())
+
+  @@index([pipelineRunId, toAgent])
+  @@index([parentId])
 }
 
 model Memory {

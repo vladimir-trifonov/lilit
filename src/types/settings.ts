@@ -16,15 +16,29 @@ export interface AgentSettings {
   roles?: Record<string, { enabled: boolean; model?: ModelType; provider?: string }>;
 }
 
+export type VoiceProvider = "openai" | "elevenlabs";
+
 export interface ProjectSettings {
   stack?: string;
   budgetLimit?: number; // Max cost in USD per pipeline run
   personalityEnabled?: boolean; // Enable agent personalities + RAG memory (default: true)
+  voiceEnabled?: boolean; // Enable TTS voice for standups (default: false)
+  voiceProvider?: VoiceProvider; // TTS provider (default: "openai")
+  adaptivePipelineEnabled?: boolean; // Enable PM mid-execution pipeline adaptation (default: false)
   agents: Record<string, AgentSettings>;
 }
 
+const DEFAULT_BUDGET = 10.0;
+
+function getDefaultBudgetLimit(): number {
+  if (typeof process !== "undefined" && process.env?.DEFAULT_BUDGET_LIMIT) {
+    return parseFloat(process.env.DEFAULT_BUDGET_LIMIT);
+  }
+  return DEFAULT_BUDGET;
+}
+
 export const DEFAULT_SETTINGS: ProjectSettings = {
-  budgetLimit: parseFloat(process.env.DEFAULT_BUDGET_LIMIT || "10.0"),
+  budgetLimit: DEFAULT_BUDGET,
   agents: {},
 };
 
@@ -37,8 +51,11 @@ export function mergeSettings(userSettings: Partial<ProjectSettings> | null): Pr
 
   return {
     stack: userSettings.stack ?? DEFAULT_SETTINGS.stack,
-    budgetLimit: userSettings.budgetLimit ?? DEFAULT_SETTINGS.budgetLimit,
+    budgetLimit: userSettings.budgetLimit ?? getDefaultBudgetLimit(),
     personalityEnabled: userSettings.personalityEnabled ?? true,
+    voiceEnabled: userSettings.voiceEnabled ?? false,
+    voiceProvider: userSettings.voiceProvider ?? "openai",
+    adaptivePipelineEnabled: userSettings.adaptivePipelineEnabled ?? false,
     agents: userSettings.agents ?? {},
   };
 }

@@ -1,4 +1,4 @@
-import { execSync } from "child_process";
+import { spawn, execSync } from "child_process";
 import fs from "fs";
 import os from "os";
 import path from "path";
@@ -82,8 +82,9 @@ export function setWorkerPid(projectId: string, pid: number) {
 }
 
 /**
- * Run Claude Code CLI with execSync (spawn hangs from Node.js context).
+ * Run Claude Code CLI using async spawn (non-blocking).
  * Writes output to log file for live UI polling.
+ * Supports mid-execution abort checking and concurrent execution.
  */
 export async function runClaudeCode(opts: {
   prompt: string;
@@ -123,75 +124,132 @@ export async function runClaudeCode(opts: {
     throw new Error(`Invalid model name: ${model}`);
   }
 
-  try {
-    // Build command — use $ENV_VAR instead of $(cat file) to avoid
-    // shell expansion of backticks/$ in prompt content (PM plans have JSON code fences)
-    const emptyMcp = path.join(tmpDir, "lilit-mcp-empty.json");
-    if (!fs.existsSync(emptyMcp)) {
-      fs.writeFileSync(emptyMcp, '{"mcpServers":{}}', "utf-8");
-    }
+  // Build command args for spawn
+  const emptyMcp = path.join(tmpDir, "lilit-mcp-empty.json");
+  if (!fs.existsSync(emptyMcp)) {
+    fs.writeFileSync(emptyMcp, '{"mcpServers":{}}', "utf-8");
+  }
 
-    let cmd = `claude -p "$LILIT_PROMPT" --model "${model}" --output-format text --permission-mode bypassPermissions --mcp-config '${emptyMcp}' --strict-mcp-config`;
+  const args = [
+    "-p", prompt,
+    "--model", model,
+    "--output-format", "text",
+    "--permission-mode", "bypassPermissions",
+    "--mcp-config", emptyMcp,
+    "--strict-mcp-config",
+  ];
 
-    const execEnv = {
-      ...process.env,
-      LILIT_PROMPT: prompt,
-    } as NodeJS.ProcessEnv;
+  if (systemPrompt) {
+    args.push("--system-prompt", systemPrompt);
+  }
 
-    if (systemPrompt) {
-      cmd += ` --system-prompt "$LILIT_SYS_PROMPT"`;
-      (execEnv as Record<string, string>).LILIT_SYS_PROMPT = systemPrompt;
-    }
+  return new Promise<ClaudeCodeResult>((resolve) => {
+    const stdoutChunks: string[] = [];
+    const stderrChunks: string[] = [];
+    let killed = false;
 
-    const output = execSync(cmd, {
+    const proc = spawn("claude", args, {
       cwd,
-      timeout: timeoutMs,
-      encoding: "utf-8",
-      maxBuffer: 50 * 1024 * 1024,
-      shell: "/bin/bash",
-      env: execEnv,
+      env: process.env,
+      stdio: ["pipe", "pipe", "pipe"],
     });
 
-    const duration = ((Date.now() - startTime) / 1000).toFixed(1);
-    appendLog(projectId, `\n${output}\n`);
+    proc.stdout.on("data", (data: Buffer) => {
+      const chunk = data.toString();
+      stdoutChunks.push(chunk);
+      appendLog(projectId, chunk);
+    });
 
-    // Parse token usage from output (Claude Code CLI reports this)
-    const tokenMatch = output.match(/(\d+)in\/(\d+)out/);
-    const tokensUsed = tokenMatch
-      ? {
-          inputTokens: parseInt(tokenMatch[1]),
-          outputTokens: parseInt(tokenMatch[2]),
-        }
-      : undefined;
+    proc.stderr.on("data", (data: Buffer) => {
+      stderrChunks.push(data.toString());
+    });
 
-    appendLog(projectId, `\n✅ [${agentLabel}] Done (${duration}s)\n`);
+    // Periodic abort check (every 3 seconds)
+    const abortInterval = setInterval(() => {
+      if (isAborted(projectId) && !killed) {
+        killed = true;
+        proc.kill("SIGTERM");
+        setTimeout(() => {
+          try { proc.kill("SIGKILL"); } catch {}
+        }, 5000);
+      }
+    }, 3000);
 
-    return {
-      success: true,
-      output: output.trim(),
-      durationMs: Date.now() - startTime,
-      tokensUsed,
-    };
-  } catch (err: unknown) {
-    const e = err as { stdout?: string; stderr?: string; message?: string };
-    const stdout = e.stdout?.toString?.()?.trim() || "";
-    const stderr = e.stderr?.toString?.()?.trim() || "";
-    const duration = ((Date.now() - startTime) / 1000).toFixed(1);
+    // Timeout
+    const timeout = setTimeout(() => {
+      if (!killed) {
+        killed = true;
+        proc.kill("SIGKILL");
+      }
+    }, timeoutMs);
 
-    if (stdout) appendLog(projectId, `\n${stdout}\n`);
-    if (stderr) appendLog(projectId, `\n⚠️ STDERR: ${stderr}\n`);
-    appendLog(projectId, `\n❌ [${agentLabel}] Failed (${duration}s): ${e.message?.slice(0, 200)}\n`);
+    proc.on("close", (code) => {
+      clearInterval(abortInterval);
+      clearTimeout(timeout);
+      try { fs.unlinkSync(promptFile); } catch {}
 
-    const errorStr = stderr || e.message || "Unknown error";
-    return {
-      success: false,
-      output: stdout,
-      error: errorStr,
-      errorKind: classifyError(errorStr),
-      durationMs: Date.now() - startTime,
-      tokensUsed: undefined,
-    };
-  } finally {
-    try { fs.unlinkSync(promptFile); } catch {}
-  }
+      const stdout = stdoutChunks.join("");
+      const stderr = stderrChunks.join("");
+      const duration = ((Date.now() - startTime) / 1000).toFixed(1);
+
+      if (killed && isAborted(projectId)) {
+        appendLog(projectId, `\n🛑 [${agentLabel}] Aborted (${duration}s)\n`);
+        resolve({
+          success: false,
+          output: stdout.trim(),
+          error: "Aborted by user",
+          durationMs: Date.now() - startTime,
+          tokensUsed: undefined,
+        });
+        return;
+      }
+
+      if (code === 0) {
+        // Parse token usage from output
+        const tokenMatch = stdout.match(/(\d+)in\/(\d+)out/);
+        const tokensUsed = tokenMatch
+          ? { inputTokens: parseInt(tokenMatch[1]), outputTokens: parseInt(tokenMatch[2]) }
+          : undefined;
+
+        appendLog(projectId, `\n✅ [${agentLabel}] Done (${duration}s)\n`);
+        resolve({
+          success: true,
+          output: stdout.trim(),
+          durationMs: Date.now() - startTime,
+          tokensUsed,
+        });
+      } else {
+        if (stderr) appendLog(projectId, `\n⚠️ STDERR: ${stderr}\n`);
+        appendLog(projectId, `\n❌ [${agentLabel}] Failed (${duration}s): exit code ${code}\n`);
+
+        const errorStr = stderr || `Process exited with code ${code}`;
+        resolve({
+          success: false,
+          output: stdout.trim(),
+          error: errorStr,
+          errorKind: classifyError(errorStr),
+          durationMs: Date.now() - startTime,
+          tokensUsed: undefined,
+        });
+      }
+    });
+
+    proc.on("error", (err) => {
+      clearInterval(abortInterval);
+      clearTimeout(timeout);
+      try { fs.unlinkSync(promptFile); } catch {}
+
+      const duration = ((Date.now() - startTime) / 1000).toFixed(1);
+      appendLog(projectId, `\n❌ [${agentLabel}] Spawn error (${duration}s): ${err.message}\n`);
+
+      resolve({
+        success: false,
+        output: "",
+        error: err.message,
+        errorKind: classifyError(err.message),
+        durationMs: Date.now() - startTime,
+        tokensUsed: undefined,
+      });
+    });
+  });
 }

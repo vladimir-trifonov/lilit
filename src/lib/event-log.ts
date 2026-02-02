@@ -25,6 +25,8 @@ export const EVENT_TYPES = {
   browser_tested: "browser_tested",
   bug_found: "bug_found",
   feedback_routed: "feedback_routed",
+  standup_generated: "standup_generated",
+  standup_insight: "standup_insight",
 } as const;
 
 export interface EventData {

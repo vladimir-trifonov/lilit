@@ -10,6 +10,7 @@ import {
   type ParsedPersonality,
   type PersonalityOverlay,
 } from "./agent-loader";
+import { AGENT } from "@/lib/models";
 
 // --- Personality Access ---
 
@@ -29,7 +30,7 @@ export function getPersonalityOverlay(
 
 // --- Relationship Management ---
 
-const AGENT_TYPES = ["pm", "architect", "developer", "qa"];
+const AGENT_TYPES = [AGENT.PM, AGENT.ARCHITECT, AGENT.DEVELOPER, AGENT.QA];
 
 /**
  * Seed all 12 directional relationship rows for a project.
@@ -115,22 +116,22 @@ export async function updateRelationships(
 
     if (approved) {
       // Reviewer trusts developer more
-      const rel = findRel(step.agent, "developer");
+      const rel = findRel(step.agent, AGENT.DEVELOPER);
       if (rel) {
         updates.push({
           fromAgent: step.agent,
-          toAgent: "developer",
+          toAgent: AGENT.DEVELOPER,
           trust: clamp(rel.trust + 0.05, 0, 1),
           rapport: clamp(rel.rapport + 0.01, 0, 1),
           lastNote: "Clean review — no issues",
         });
       }
     } else if (rejected) {
-      const rel = findRel(step.agent, "developer");
+      const rel = findRel(step.agent, AGENT.DEVELOPER);
       if (rel) {
         updates.push({
           fromAgent: step.agent,
-          toAgent: "developer",
+          toAgent: AGENT.DEVELOPER,
           trust: clamp(rel.trust - 0.08, 0, 1),
           tension: clamp(rel.tension + 0.10, 0, 1),
           lastNote: "Review rejected — issues found",
@@ -140,24 +141,24 @@ export async function updateRelationships(
   }
 
   // QA outcomes
-  if (step.agent === "qa") {
+  if (step.agent === AGENT.QA) {
     if (result.success && !result.output.includes('"passed": false')) {
-      const rel = findRel("qa", "developer");
+      const rel = findRel(AGENT.QA, AGENT.DEVELOPER);
       if (rel) {
         updates.push({
-          fromAgent: "qa",
-          toAgent: "developer",
+          fromAgent: AGENT.QA,
+          toAgent: AGENT.DEVELOPER,
           trust: clamp(rel.trust + 0.05, 0, 1),
           rapport: clamp(rel.rapport + 0.01, 0, 1),
           lastNote: "All tests passing",
         });
       }
     } else {
-      const rel = findRel("qa", "developer");
+      const rel = findRel(AGENT.QA, AGENT.DEVELOPER);
       if (rel) {
         updates.push({
-          fromAgent: "qa",
-          toAgent: "developer",
+          fromAgent: AGENT.QA,
+          toAgent: AGENT.DEVELOPER,
           trust: clamp(rel.trust - 0.05, 0, 1),
           tension: clamp(rel.tension + 0.08, 0, 1),
           lastNote: "Test failures detected",
@@ -169,11 +170,11 @@ export async function updateRelationships(
   // Fix outcomes
   if (step.role === "fix") {
     if (result.success) {
-      const rel = findRel("pm", "developer");
+      const rel = findRel(AGENT.PM, AGENT.DEVELOPER);
       if (rel) {
         updates.push({
-          fromAgent: "pm",
-          toAgent: "developer",
+          fromAgent: AGENT.PM,
+          toAgent: AGENT.DEVELOPER,
           trust: clamp(rel.trust + 0.03, 0, 1),
           rapport: clamp(rel.rapport + 0.01, 0, 1),
           lastNote: "Fix applied successfully",

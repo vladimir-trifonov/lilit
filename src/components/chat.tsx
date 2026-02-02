@@ -14,6 +14,8 @@ import { AgentsPanel } from "@/components/agents-panel";
 import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from "@/components/ui/resizable";
 import { parseLogSteps } from "@/lib/log-parser";
 import type { StepInfo } from "@/types/pipeline";
+import { StandupThread, type StandupMessageData } from "@/components/standup-thread";
+import { AgentMessageThread, type AgentMessageData } from "@/components/agent-message-thread";
 
 interface Project {
   id: string;
@@ -297,7 +299,7 @@ export function Chat({ project }: { project: Project }) {
           id: `asst-${Date.now()}`,
           role: "assistant",
           content: data.response,
-          metadata: JSON.stringify({ steps: data.steps }),
+          metadata: JSON.stringify({ steps: data.steps, agentMessages: data.agentMessages, adaptations: data.adaptations }),
           createdAt: new Date().toISOString(),
         };
         setMessages((prev) => [...prev, newMsg]);
@@ -574,10 +576,16 @@ function MessageBubble({ message }: { message: Message }) {
   const isSystem = message.role === "system";
 
   let steps: StepInfo[] = [];
+  let standupMessages: StandupMessageData[] = [];
+  let agentMessages: AgentMessageData[] = [];
+  let adaptations: Array<{ afterStep: number; reason?: string; addedSteps?: string[]; removedSteps?: number[]; costUsd: number }> = [];
   if (message.metadata) {
     try {
       const meta = JSON.parse(message.metadata);
       steps = meta.steps || [];
+      standupMessages = meta.standup?.messages || [];
+      agentMessages = meta.agentMessages || [];
+      adaptations = meta.adaptations || [];
     } catch {
       // ignore
     }
@@ -619,6 +627,35 @@ function MessageBubble({ message }: { message: Message }) {
                 <span>{s.status === "done" ? "✅" : "❌"}</span>
               </div>
             ))}
+          </div>
+        )}
+
+        {adaptations.length > 0 && (
+          <div className="mt-3 pt-2 border-t border-zinc-700 space-y-1">
+            <div className="text-xs text-zinc-500 font-medium">Pipeline Adaptations:</div>
+            {adaptations.map((a, i) => (
+              <div key={i} className="flex items-start gap-2 text-xs">
+                <Badge variant="outline" className="text-[10px] px-1.5 py-0 bg-amber-500/10 text-amber-700 border-amber-500/20 shrink-0">
+                  after step {a.afterStep + 1}
+                </Badge>
+                <span className="text-zinc-400">
+                  {a.reason ?? "Pipeline modified"}
+                  {a.addedSteps && a.addedSteps.length > 0 && ` (+${a.addedSteps.join(", ")})`}
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {agentMessages.length > 0 && (
+          <div className="mt-3 pt-2 border-t border-zinc-700">
+            <AgentMessageThread messages={agentMessages} />
+          </div>
+        )}
+
+        {standupMessages.length > 0 && (
+          <div className="mt-3 pt-2 border-t border-zinc-700">
+            <StandupThread messages={standupMessages} />
           </div>
         )}
       </div>

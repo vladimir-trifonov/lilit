@@ -20,6 +20,10 @@ import { writePlanFile, waitForConfirmation, cleanupPlanFiles } from "./plan-gat
 import { buildPersonalityInjection, initializeRelationships, updateRelationships, getPersonality } from "./personality";
 import { queryMemories, formatMemoriesForPrompt, getMemoryTypesForAgent } from "./memory";
 import { ingestDecisionFromEvent, ingestPersonalityFromAgentRun } from "./memory-ingestion";
+import { generateStandup, type StandupResult } from "./standup";
+import { getMessageInstructions, extractMessages, storeMessages, getInboxMessages, formatInboxForPrompt, getAllMessages } from "./agent-messages";
+import { buildAdaptationPrompt, parseAdaptation, applyAdaptation, shouldCheckAdaptation, type AdaptationRecord } from "./pipeline-adaptation";
+import { AGENT, REQUIRED_AGENTS } from "@/lib/models";
 
 // Helper for logging to the live UI log file (project-scoped)
 function appendLog(projectId: string, text: string) {
@@ -66,10 +70,27 @@ export interface OrchestratorResult {
   steps: StepResult[];
   plan?: PMPlan;
   runId?: string;
+  standup?: StandupResult;
+  agentMessages?: Array<{
+    id: string;
+    fromAgent: string;
+    toAgent: string;
+    messageType: string;
+    content: string;
+    phase: number;
+    createdAt: string;
+  }>;
+  adaptations?: Array<{
+    afterStep: number;
+    reason?: string;
+    addedSteps?: string[];
+    removedSteps?: number[];
+    costUsd: number;
+  }>;
 }
 
 export type ProgressEvent = {
-  type: "agent_start" | "agent_done" | "agent_error" | "plan_ready" | "plan_awaiting_confirmation" | "plan_confirmed" | "plan_rejected" | "summary" | "done" | "output";
+  type: "agent_start" | "agent_done" | "agent_error" | "agent_message" | "pipeline_adapted" | "plan_ready" | "plan_awaiting_confirmation" | "plan_confirmed" | "plan_rejected" | "summary" | "done" | "output";
   agent?: string;
   role?: string;
   title?: string;
@@ -182,6 +203,7 @@ export async function orchestrate(opts: {
   let fixCycle = 0;
   let startStepIndex = 0;
   let pipelineRunDbId: string | undefined;
+  const adaptations: AdaptationRecord[] = [];
 
   // ----- Resume branch -----
   if (resumeRunId) {
@@ -233,6 +255,17 @@ export async function orchestrate(opts: {
     appendLog(projectId, `💬 Request: ${userMessage.slice(0, 200)}${userMessage.length > 200 ? "..." : ""}\n`);
     appendLog(projectId, `⏰ Started: ${new Date().toLocaleString()}\n\n`);
 
+    // Validate required agents exist
+    const registry = getAgentRegistry();
+    for (const required of REQUIRED_AGENTS) {
+      if (!registry[required]) {
+        const error = `Required agent "${required}" not found. Ensure agents/${required}/AGENT.md exists.`;
+        appendLog(projectId, `\n❌ ${error}\n`);
+        await checkpoint(runId, { status: "failed", error });
+        return { response: error, steps, runId };
+      }
+    }
+
     // 1. Get event history for context
     appendLog(projectId, `📚 Loading project history...\n`);
     const history = await getEventHistory({ projectId, limit: 50 });
@@ -240,11 +273,11 @@ export async function orchestrate(opts: {
     appendLog(projectId, `✅ Loaded ${history.length} previous events\n\n`);
 
     // 2. Ask PM to create a plan
-    emit({ type: "agent_start", agent: "pm", title: "Creating execution plan..." });
+    emit({ type: "agent_start", agent: AGENT.PM, title: "Creating execution plan..." });
     const conversationContext = await getConversationContext(conversationId);
-    const pmPrompt = buildPMPrompt(userMessage, project.path, project.name, historyContext, conversationContext, projectSettings);
+    const pmPrompt = await buildPMPrompt(userMessage, project.path, project.name, historyContext, conversationContext, projectSettings, projectId);
     const pmResult = await runAgent({
-      agent: "pm",
+      agent: AGENT.PM,
       prompt: pmPrompt,
       cwd: project.path,
       projectId,
@@ -263,7 +296,7 @@ export async function orchestrate(opts: {
       if (questions) {
         const formatted = questions.map(q => `- ${q}`).join("\n");
         appendLog(projectId, `\n💬 Clarification needed before proceeding:\n${formatted}\n`);
-        emit({ type: "agent_done", agent: "pm", message: "Needs clarification" });
+        emit({ type: "agent_done", agent: AGENT.PM, message: "Needs clarification" });
         await checkpoint(runId, { status: "completed" });
         return {
           response: `I need a few clarifications before creating a plan:\n\n${formatted}`,
@@ -274,7 +307,7 @@ export async function orchestrate(opts: {
 
       // PM produced unstructured text — could not parse a plan
       appendLog(projectId, `\n⚠️ Could not parse PM plan from output\n`);
-      emit({ type: "agent_error", agent: "pm", message: "Could not parse plan" });
+      emit({ type: "agent_error", agent: AGENT.PM, message: "Could not parse plan" });
       await checkpoint(runId, { status: "failed", error: "Could not parse PM plan" });
       return { response: pmResult.output, steps, runId };
     }
@@ -290,13 +323,13 @@ export async function orchestrate(opts: {
 
     await logEvent({
       projectId,
-      agent: "pm",
+      agent: AGENT.PM,
       type: "plan_created",
       data: { analysis: plan.analysis, pipeline: plan.pipeline, taskCount: plan.tasks.length },
     });
 
-    steps.push({ agent: "pm", title: "Execution Plan", status: "done", output: plan.analysis });
-    emit({ type: "plan_ready", agent: "pm", title: "Plan ready", message: plan.analysis });
+    steps.push({ agent: AGENT.PM, title: "Execution Plan", status: "done", output: plan.analysis });
+    emit({ type: "plan_ready", agent: AGENT.PM, title: "Plan ready", message: plan.analysis });
 
     // Checkpoint: plan parsed, awaiting confirmation
     await checkpoint(runId, {
@@ -313,7 +346,7 @@ export async function orchestrate(opts: {
 
     await logEvent({
       projectId,
-      agent: "pm",
+      agent: AGENT.PM,
       type: "plan_awaiting_confirmation",
       data: { runId, plan },
     });
@@ -334,7 +367,7 @@ export async function orchestrate(opts: {
 
         await logEvent({
           projectId,
-          agent: "pm",
+          agent: AGENT.PM,
           type: "plan_rejected",
           data: { notes: confirmation.notes },
         });
@@ -354,7 +387,7 @@ export async function orchestrate(opts: {
 
       await logEvent({
         projectId,
-        agent: "pm",
+        agent: AGENT.PM,
         type: "plan_confirmed",
         data: {},
       });
@@ -390,12 +423,12 @@ export async function orchestrate(opts: {
       appendLog(projectId, `⏰ Aborted at: ${new Date().toLocaleString()}\n`);
       appendLog(projectId, `📊 Completed ${i}/${pipeline.length} steps before abort\n\n`);
       steps.push({
-        agent: "pm",
+        agent: AGENT.PM,
         title: "Pipeline aborted",
         status: "failed",
         output: `Aborted by user at step ${i + 1}/${pipeline.length}`
       });
-      emit({ type: "agent_error", agent: "pm", message: "Pipeline aborted by user" });
+      emit({ type: "agent_error", agent: AGENT.PM, message: "Pipeline aborted by user" });
 
       await checkpoint(activeRunId, {
         status: "aborted",
@@ -485,6 +518,27 @@ export async function orchestrate(opts: {
       }
     }
 
+    // Inter-agent messaging: check inbox and build message context
+    let inboxContext = "";
+    let messageInstructions = "";
+    if (pipelineRunDbId) {
+      try {
+        const inbox = await getInboxMessages({
+          pipelineRunId: pipelineRunDbId,
+          toAgent: step.agent,
+        });
+        if (inbox.length > 0) {
+          inboxContext = formatInboxForPrompt(inbox, projectSettings.voiceEnabled === true);
+          appendLog(projectId, `📨 ${inbox.length} message(s) in inbox for ${stepLabel}\n`);
+        }
+        // Determine other agents in the pipeline for message routing
+        const otherAgents = [...new Set(pipeline.map((s) => s.agent))];
+        messageInstructions = getMessageInstructions(step.agent, otherAgents);
+      } catch {
+        // Message system is non-fatal
+      }
+    }
+
     const prompt = buildStepPrompt({
       step,
       task,
@@ -494,6 +548,8 @@ export async function orchestrate(opts: {
       lastOutput,
       plan,
       memoryContext,
+      inboxContext,
+      messageInstructions,
     });
 
     const result = await runAgent({
@@ -508,6 +564,120 @@ export async function orchestrate(opts: {
       memoryContext,
     });
 
+    // Extract inter-agent messages from output
+    if (pipelineRunDbId && result.output) {
+      try {
+        const { cleanOutput, messages } = extractMessages(result.output);
+        if (messages.length > 0) {
+          const stored = await storeMessages({
+            pipelineRunId: pipelineRunDbId,
+            fromAgent: step.agent,
+            fromRole: step.role,
+            phase: i,
+            messages,
+          });
+          appendLog(projectId, `📤 ${stored.length} message(s) sent to other agents\n`);
+          for (const msg of stored) {
+            appendLog(projectId, `   → ${msg.toAgent}: [${msg.messageType}] ${msg.content.slice(0, 100)}${msg.content.length > 100 ? "..." : ""}\n`);
+          }
+          emit({
+            type: "agent_message",
+            agent: step.agent,
+            message: `${messages.length} message(s) sent`,
+          });
+          // Use cleaned output (message blocks stripped)
+          result.output = cleanOutput;
+        }
+      } catch {
+        // Message extraction is non-fatal
+      }
+    }
+
+    // Adaptive pipeline: PM evaluates if remaining pipeline needs modification
+    if (
+      projectSettings.adaptivePipelineEnabled &&
+      pipelineRunDbId &&
+      i < pipeline.length - 1 // no point adapting after the last step
+    ) {
+      try {
+        const recentMsgs = await getAllMessages(pipelineRunDbId);
+        const thisStepMsgs = recentMsgs.filter((m) => m.phase === i);
+        if (thisStepMsgs.length > 0 && shouldCheckAdaptation(thisStepMsgs.map((m) => ({ type: m.messageType })))) {
+          appendLog(projectId, `\n🔄 Adaptive pipeline: PM evaluating ${thisStepMsgs.length} agent message(s)...\n`);
+
+          const remainingLabels = pipeline.slice(i + 1).map((s) => s.role ? `${s.agent}:${s.role}` : s.agent);
+          const adaptPrompt = buildAdaptationPrompt({
+            currentStepIndex: i,
+            completedStepLabel: step.role ? `${step.agent}:${step.role}` : step.agent,
+            completedSteps: steps.map((s) => ({
+              agent: s.agent,
+              role: s.role,
+              title: s.title,
+              status: s.status,
+            })),
+            remainingPipeline: remainingLabels,
+            agentMessages: thisStepMsgs.map((m) => ({
+              fromAgent: m.fromAgent,
+              toAgent: m.toAgent,
+              type: m.messageType,
+              content: m.content,
+            })),
+            userMessage,
+          });
+
+          const adaptResult = await runAgent({
+            agent: AGENT.PM,
+            prompt: adaptPrompt,
+            cwd: project.path,
+            projectId,
+            settings: projectSettings,
+            pipelineRunId: pipelineRunDbId,
+          });
+
+          if (adaptResult.cost) runningCost += adaptResult.cost;
+
+          const adaptation = parseAdaptation(adaptResult.output);
+
+          if (adaptation.action === "modify") {
+            const oldLen = pipeline.length;
+            pipeline = applyAdaptation(pipeline, i, adaptation);
+            const diff = pipeline.length - oldLen;
+
+            adaptations.push({
+              afterStep: i,
+              adaptation,
+              triggeredBy: thisStepMsgs.map((m) => m.id),
+              costUsd: adaptResult.cost ?? 0,
+            });
+
+            appendLog(projectId, `🔀 Pipeline adapted: ${adaptation.reason ?? "PM modification"}\n`);
+            if (diff > 0) appendLog(projectId, `   +${diff} step(s) added\n`);
+            if (diff < 0) appendLog(projectId, `   ${diff} step(s) removed\n`);
+            appendLog(projectId, `   New pipeline: ${pipeline.slice(i + 1).map((s) => s.role ? `${s.agent}:${s.role}` : s.agent).join(" → ")}\n`);
+
+            emit({
+              type: "pipeline_adapted",
+              agent: AGENT.PM,
+              message: adaptation.reason ?? "Pipeline modified",
+              step: i + 1,
+              totalSteps: pipeline.length,
+            });
+
+            await logEvent({
+              projectId,
+              agent: AGENT.PM,
+              type: "pipeline_adapted",
+              data: { afterStep: i, adaptation, newPipelineLength: pipeline.length },
+            });
+          } else {
+            appendLog(projectId, `✅ PM: No pipeline changes needed\n`);
+          }
+        }
+      } catch {
+        // Adaptation is non-fatal
+      }
+    }
+
     // Track cost and check budget
     if (result.cost) {
       runningCost += result.cost;
@@ -515,7 +685,7 @@ export async function orchestrate(opts: {
       if (projectSettings.budgetLimit && runningCost > projectSettings.budgetLimit) {
         appendLog(projectId, `\n💰 BUDGET LIMIT EXCEEDED: $${runningCost.toFixed(2)} > $${projectSettings.budgetLimit}\n`);
         steps.push({
-          agent: "pm",
+          agent: AGENT.PM,
           title: "Budget limit exceeded",
           status: "failed",
           output: `Budget limit of $${projectSettings.budgetLimit} exceeded (current: $${runningCost.toFixed(2)})`
@@ -539,7 +709,7 @@ export async function orchestrate(opts: {
     if (isAborted(projectId)) {
       appendLog(projectId, `\n🛑 Abort detected after agent execution\n`);
       steps.push({
-        agent: "pm",
+        agent: AGENT.PM,
         title: "Pipeline aborted",
         status: "failed",
         output: `Aborted during ${stepLabel} execution`
@@ -608,7 +778,7 @@ export async function orchestrate(opts: {
       if (fixCycle >= MAX_FIX_CYCLES) {
         appendLog(projectId, `\n🚫 Maximum fix cycles (${MAX_FIX_CYCLES}) reached. Stopping pipeline.\n`);
         steps.push({
-          agent: "pm",
+          agent: AGENT.PM,
           title: "Max fix cycles reached",
           status: "failed",
           output: `Reached ${MAX_FIX_CYCLES} fix attempts. Stopping.`,
@@ -619,7 +789,7 @@ export async function orchestrate(opts: {
       appendLog(projectId, `🔄 Asking PM to re-evaluate and create fix plan...\n`);
       const reEvalPrompt = buildReEvalPrompt(step, result.output, eventsContext, userMessage);
       const reEvalResult = await runAgent({
-        agent: "pm",
+        agent: AGENT.PM,
         prompt: reEvalPrompt,
         cwd: project.path,
         projectId,
@@ -639,7 +809,7 @@ export async function orchestrate(opts: {
 
         await logEvent({
           projectId,
-          agent: "pm",
+          agent: AGENT.PM,
           type: "feedback_routed",
           data: { reason: "step_failed", step: `${step.agent}:${step.role}`, fixPipeline: fixPlan.pipeline },
         });
@@ -668,6 +838,36 @@ export async function orchestrate(opts: {
   emit({ type: "summary", title: "Generating summary..." });
   const summary = await generateSummary(userMessage, steps);
 
+  // 4.5 Generate team standup (personality-aware, RAG-enhanced)
+  let standupResult: StandupResult | undefined;
+  const pipelineWasAborted = steps.some(s => s.output.includes("Aborted"));
+  if (!pipelineWasAborted && pipelineRunDbId && plan) {
+    try {
+      appendLog(projectId, `\n${"=".repeat(80)}\n🗣️  GENERATING TEAM STANDUP\n${"=".repeat(80)}\n`);
+      standupResult = await generateStandup({
+        pipelineRunId: pipelineRunDbId,
+        projectId,
+        userMessage,
+        steps,
+        plan,
+        fixCycleCount: fixCycle,
+        totalCost: runningCost,
+        settings: projectSettings,
+      });
+
+      if (standupResult.messages.length > 0) {
+        const insights = standupResult.messages.filter(m => m.insightType !== "none");
+        const noTension = standupResult.messages.length - insights.length;
+        appendLog(projectId, `✅ Standup complete: ${insights.length} insight(s), ${noTension} agent(s) reported no tensions\n`);
+        runningCost += standupResult.totalCost;
+      } else {
+        appendLog(projectId, `ℹ️  No standup messages generated\n`);
+      }
+    } catch {
+      appendLog(projectId, `⚠️  Standup generation failed (non-blocking)\n`);
+    }
+  }
+
   appendLog(projectId, `\n${"=".repeat(80)}\n✨ PIPELINE COMPLETE\n${"=".repeat(80)}\n`);
   appendLog(projectId, `⏰ Finished: ${new Date().toLocaleString()}\n`);
   appendLog(projectId, `📊 Total steps: ${steps.length}\n`);
@@ -682,8 +882,38 @@ export async function orchestrate(opts: {
     completedSteps: JSON.stringify(steps),
   });
 
+  // Collect all inter-agent messages for UI
+  let agentMessages: OrchestratorResult["agentMessages"];
+  if (pipelineRunDbId) {
+    try {
+      const allMsgs = await getAllMessages(pipelineRunDbId);
+      if (allMsgs.length > 0) {
+        agentMessages = allMsgs.map((m) => ({
+          id: m.id,
+          fromAgent: m.fromAgent,
+          toAgent: m.toAgent,
+          messageType: m.messageType,
+          content: m.content,
+          phase: m.phase,
+          createdAt: m.createdAt.toISOString(),
+        }));
+      }
+    } catch {}
+  }
+
   emit({ type: "done", message: "Pipeline complete" });
-  return { response: summary, steps, plan, runId: activeRunId };
+  // Map adaptation records for the result
+  const adaptationResults = adaptations.length > 0
+    ? adaptations.map((a) => ({
+        afterStep: a.afterStep,
+        reason: a.adaptation.reason,
+        addedSteps: a.adaptation.addSteps,
+        removedSteps: a.adaptation.removeIndices,
+        costUsd: a.costUsd,
+      }))
+    : undefined;
+
+  return { response: summary, steps, plan, runId: activeRunId, standup: standupResult, agentMessages, adaptations: adaptationResults };
 }
 
 // ----- Agent Runner -----
@@ -967,14 +1197,15 @@ async function getConversationContext(conversationId: string): Promise<string> {
     .join("\n\n");
 }
 
-function buildPMPrompt(
+async function buildPMPrompt(
   userMessage: string,
   projectPath: string,
   projectName: string,
   historyContext: string,
   conversationContext: string,
   settings?: ProjectSettings,
-): string {
+  projectId?: string,
+): Promise<string> {
   // Inject available agents list, filtering out disabled ones
   const registry = getAgentRegistry();
   const agentsList = Object.values(registry)
@@ -989,6 +1220,55 @@ function buildPMPrompt(
     .join("\n");
 
   const skillsList = formatSkillsForPM();
+
+  // Pipeline Memory: retrieve recent actionable standup insights
+  let pipelineMemorySection = "";
+  if (projectId) {
+    try {
+      const recentInsights = await prisma.standupMessage.findMany({
+        where: {
+          pipelineRun: { projectId },
+          insightType: { not: "none" },
+          actionable: true,
+        },
+        orderBy: { createdAt: "desc" },
+        take: 15,
+        select: {
+          fromAgent: true,
+          toAgent: true,
+          insightType: true,
+          message: true,
+          createdAt: true,
+        },
+      });
+
+      if (recentInsights.length > 0) {
+        const agentNames = Object.fromEntries(
+          Object.values(registry).map((a) => {
+            const p = getPersonality(a.type);
+            return [a.type, p?.codename ?? a.name];
+          })
+        );
+        const formatted = recentInsights
+          .map((ins) => {
+            const from = agentNames[ins.fromAgent] ?? ins.fromAgent;
+            const to = agentNames[ins.toAgent] ?? ins.toAgent;
+            const date = ins.createdAt.toISOString().split("T")[0];
+            return `- [${ins.insightType}] ${from} → ${to} (${date}): ${ins.message}`;
+          })
+          .join("\n");
+
+        pipelineMemorySection = `## Pipeline Memory (Past Standup Insights)
+
+Recent observations from your team across previous pipeline runs. Consider these when planning — if a recurring theme has been flagged multiple times, prioritize addressing it.
+
+${formatted}
+`;
+      }
+    } catch {
+      // Pipeline memory is non-fatal
+    }
+  }
 
   return `## Project
 Name: ${projectName}
@@ -1006,7 +1286,7 @@ ${conversationContext}
 ## Event History
 ${historyContext}
 
-## User Request
+${pipelineMemorySection}## User Request
 ${userMessage}
 
 Create an execution plan following the Markdown format from your instructions.`;
@@ -1021,8 +1301,10 @@ function buildStepPrompt(opts: {
   lastOutput: string;
   plan: PMPlan;
   memoryContext?: string;
+  inboxContext?: string;
+  messageInstructions?: string;
 }): string {
-  const { step, task, userMessage, projectPath, eventsContext, lastOutput, plan, memoryContext } = opts;
+  const { step, task, userMessage, projectPath, eventsContext, lastOutput, plan, memoryContext, inboxContext, messageInstructions } = opts;
 
   let prompt = `## Project: ${projectPath}\n\n`;
 
@@ -1030,10 +1312,14 @@ function buildStepPrompt(opts: {
     prompt += `## Relevant Memories\n${memoryContext}\n\n`;
   }
 
+  if (inboxContext) {
+    prompt += inboxContext + "\n\n";
+  }
+
   prompt += `## Event History\n${eventsContext}\n\n`;
   prompt += `## Original User Request\n${userMessage}\n\n`;
 
-  if (step.agent === "architect") {
+  if (step.agent === AGENT.ARCHITECT) {
     prompt += `## Your Task\nDefine the architecture and tech stack for this project.\n`;
     prompt += `Output your architecture spec as a JSON block.\n`;
   } else if (task) {
@@ -1051,9 +1337,13 @@ function buildStepPrompt(opts: {
     prompt += `Fix these issues. Report what you changed.\n`;
   }
 
-  if (step.agent === "qa" && step.role === "automation") {
+  if (step.agent === AGENT.QA && step.role === "automation") {
     prompt += `## PM's Task Plan\n${JSON.stringify(plan.tasks, null, 2)}\n\n`;
     prompt += `Write and run tests based on the acceptance criteria. Output JSON as specified.\n`;
+  }
+
+  if (messageInstructions) {
+    prompt += messageInstructions;
   }
 
   return prompt;
@@ -1140,7 +1430,7 @@ function parsePMPlan(raw: string): PMPlan | null {
 
   const tasks: PMPlanTask[] = taskBlocks.map((block, idx) => {
     const title = block.split("\n")[0]?.trim() ?? `Task ${idx + 1}`;
-    const agent = block.match(/- Agent:\s*(.+)/)?.[1]?.trim() ?? "developer";
+    const agent = block.match(/- Agent:\s*(.+)/)?.[1]?.trim() ?? AGENT.DEVELOPER;
     const role = block.match(/- Role:\s*(.+)/)?.[1]?.trim() ?? "code";
     const description = block.match(/- Description:\s*(.+)/)?.[1]?.trim() ?? title;
     const skills = block.match(/- Skills:\s*(.+)/)?.[1]?.split(",").map(s => s.trim()).filter(Boolean);
@@ -1171,7 +1461,7 @@ function parsePMPlan(raw: string): PMPlan | null {
 
   return {
     analysis,
-    needsArchitect: pipeline.some(s => s.startsWith("architect")),
+    needsArchitect: pipeline.some(s => s.startsWith(AGENT.ARCHITECT)),
     tasks,
     pipeline,
   };
@@ -1198,14 +1488,14 @@ function parsePipeline(pipeline: string[]): PipelineStep[] {
 
 // Map-based event type resolver with fallback
 const EVENT_TYPE_MAP: Record<string, Record<string, string>> = {
-  architect: { "": "architecture_defined" },
-  developer: {
+  [AGENT.ARCHITECT]: { "": "architecture_defined" },
+  [AGENT.DEVELOPER]: {
     code: "code_written",
     review: "review_done",
     fix: "fix_applied",
     devops: "devops_configured",
   },
-  qa: {
+  [AGENT.QA]: {
     automation: "tests_written",
     manual: "browser_tested",
   },
@@ -1243,7 +1533,7 @@ function isFailure(step: PipelineStep, output: string): boolean {
     }
   } catch { /* not JSON */ }
 
-  if (step.agent === "qa") {
+  if (step.agent === AGENT.QA) {
     const lower = output.toLowerCase();
     if (output.includes("🔴")) return true;
     const failMatch = lower.match(/(\d+)\s+fail/);

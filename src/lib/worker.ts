@@ -50,6 +50,9 @@ async function main() {
       steps: result.steps,
       plan: result.plan,
       runId: result.runId ?? runId,
+      standup: result.standup,
+      agentMessages: result.agentMessages,
+      adaptations: result.adaptations,
     }));
   } catch (err) {
     const msg = err instanceof Error ? err.message : "Unknown error";
