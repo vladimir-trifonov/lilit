@@ -18,6 +18,8 @@ if (!projectId || !conversationId || !userMessage) {
   process.exit(1);
 }
 
+const runId = `run-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
 async function main() {
   // Write PID for abort functionality
   setWorkerPid(process.pid);
@@ -28,6 +30,7 @@ async function main() {
       projectId,
       conversationId,
       userMessage,
+      runId,
     });
 
     // Write result to stdout as JSON for the caller
@@ -36,12 +39,14 @@ async function main() {
       response: result.response,
       steps: result.steps,
       plan: result.plan,
+      runId,
     }));
   } catch (err) {
     const msg = err instanceof Error ? err.message : "Unknown error";
     process.stdout.write(JSON.stringify({
       success: false,
       error: msg,
+      runId,
     }));
     process.exit(1);
   }

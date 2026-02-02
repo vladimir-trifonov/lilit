@@ -2,7 +2,7 @@
  * Parse live log content to extract pipeline steps and their status
  */
 
-import type { PipelineStep, AgentType, AgentRole, StepStatus } from "@/types/pipeline";
+import type { PipelineStep, StepStatus } from "@/types/pipeline";
 
 /**
  * Parse log content to extract pipeline steps
@@ -25,7 +25,7 @@ export function parseLogSteps(logContent: string): PipelineStep[] {
 
       // Initialize all steps as pending
       planSteps.forEach((stepLabel, idx) => {
-        const [agent, role] = stepLabel.split(":") as [AgentType, AgentRole | undefined];
+        const [agent, role] = stepLabel.split(":") as [string, string | undefined];
         steps.push({
           agent,
           role,
@@ -43,8 +43,8 @@ export function parseLogSteps(logContent: string): PipelineStep[] {
     if (stepStartMatch) {
       const stepNum = parseInt(stepStartMatch[1]);
       const totalSteps = parseInt(stepStartMatch[2]);
-      const agent = stepStartMatch[3] as AgentType;
-      const role = stepStartMatch[4] as AgentRole | undefined;
+      const agent = stepStartMatch[3] as string;
+      const role = stepStartMatch[4] as string | undefined;
 
       currentStep = {
         agent,

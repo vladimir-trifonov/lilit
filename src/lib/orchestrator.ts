@@ -1,19 +1,21 @@
 /**
  * Orchestrator — the central router.
- * All agents run through Claude Code CLI (`claude -p`).
+ * All agents run through Claude Code CLI (`claude -p`) or Gemini API.
  * PM is the brain — decides plan and team composition.
  *
- * Flow: User → Orchestrator → PM (plan) → execute pipeline → response
+ * Flow: User → Orchestrator → PM (plan) → [confirm] → execute pipeline → response
  */
 
 import { prisma } from "./prisma";
 import { runClaudeCode, clearLog, isAborted, resetAbort, getLogFile } from "./claude-code";
 import { runLLM } from "./llm";
-import { agents, getSystemPrompt, getProviderConfig, type AgentType } from "./agents";
-import { logEvent, getEventHistory, formatEventsForPrompt, type EventType } from "./event-log";
+import { getAgentRegistry, getSystemPrompt, getProviderConfig } from "./agent-loader";
+import { logEvent, getEventHistory, formatEventsForPrompt } from "./event-log";
 import { getSkillsForAgent, swapProjectSkills } from "./skills";
 import { calculateCost, formatCost } from "./cost-calculator";
+import { resolveProviderId } from "./providers";
 import { parseSettings, type ProjectSettings } from "@/types/settings";
+import { writePlanFile, waitForConfirmation, cleanupPlanFiles } from "./plan-gate";
 import fs from "fs";
 
 // Helper for logging to the live UI log file
@@ -24,27 +26,31 @@ function appendLog(text: string) {
 // ----- Types -----
 
 interface PipelineStep {
-  agent: AgentType;
+  agent: string;
   role?: string;
+}
+
+interface PMPlanTask {
+  id: number;
+  title: string;
+  description: string;
+  agent: string;
+  role: string;
+  dependsOn: number[];
+  acceptanceCriteria: string[];
+  provider?: string;
+  model?: string;
 }
 
 interface PMPlan {
   analysis: string;
   needsArchitect: boolean;
-  tasks: Array<{
-    id: number;
-    title: string;
-    description: string;
-    agent: string;
-    role: string;
-    dependsOn: number[];
-    acceptanceCriteria: string[];
-  }>;
+  tasks: PMPlanTask[];
   pipeline: string[];
 }
 
 interface StepResult {
-  agent: AgentType;
+  agent: string;
   role?: string;
   title: string;
   status: "done" | "failed";
@@ -58,7 +64,7 @@ export interface OrchestratorResult {
 }
 
 export type ProgressEvent = {
-  type: "agent_start" | "agent_done" | "agent_error" | "plan_ready" | "summary" | "done" | "output";
+  type: "agent_start" | "agent_done" | "agent_error" | "plan_ready" | "plan_awaiting_confirmation" | "plan_confirmed" | "plan_rejected" | "summary" | "done" | "output";
   agent?: string;
   role?: string;
   title?: string;
@@ -76,21 +82,22 @@ export async function orchestrate(opts: {
   projectId: string;
   conversationId: string;
   userMessage: string;
+  runId?: string;
   onProgress?: (event: ProgressEvent) => void;
 }): Promise<OrchestratorResult> {
   const { projectId, conversationId, userMessage, onProgress } = opts;
+  const runId = opts.runId ?? `run-${Date.now()}`;
   const emit = onProgress ?? (() => {});
   const project = await prisma.project.findUniqueOrThrow({ where: { id: projectId } });
   const projectSettings = parseSettings(project.settings);
   const steps: StepResult[] = [];
 
-  let runningCost = 0; // Track cost during execution
+  let runningCost = 0;
 
-  // Clear log file and abort flag for fresh run
   clearLog();
   resetAbort();
 
-  appendLog(`\n${"=".repeat(80)}\n🚀 CREW PIPELINE STARTED\n${"=".repeat(80)}\n`);
+  appendLog(`\n${"=".repeat(80)}\n🚀 LILIT PIPELINE STARTED\n${"=".repeat(80)}\n`);
   appendLog(`📋 Project: ${project.name}\n`);
   appendLog(`📂 Path: ${project.path}\n`);
   appendLog(`🏗️  Stack: ${projectSettings.stack || "auto-detect"}\n`);
@@ -146,6 +153,61 @@ export async function orchestrate(opts: {
   steps.push({ agent: "pm", title: "Execution Plan", status: "done", output: plan.analysis });
   emit({ type: "plan_ready", agent: "pm", title: "Plan ready", message: plan.analysis });
 
+  // 2.5. Plan confirmation gate
+  appendLog(`\n⏳ AWAITING PLAN CONFIRMATION...\n`);
+  emit({ type: "plan_awaiting_confirmation", title: "Waiting for approval..." });
+
+  await logEvent({
+    projectId,
+    agent: "pm",
+    type: "plan_awaiting_confirmation",
+    data: { runId, plan },
+  });
+
+  writePlanFile(runId, plan);
+
+  try {
+    const confirmation = await waitForConfirmation(runId, {
+      timeoutMs: 600_000, // 10 min
+      pollIntervalMs: 1000,
+      abortCheck: isAborted,
+    });
+
+    if (confirmation.action === "reject") {
+      appendLog(`\n🚫 PLAN REJECTED by user\n`);
+      if (confirmation.notes) appendLog(`📝 Notes: ${confirmation.notes}\n`);
+      emit({ type: "plan_rejected", title: "Plan rejected" });
+
+      await logEvent({
+        projectId,
+        agent: "pm",
+        type: "plan_rejected",
+        data: { notes: confirmation.notes },
+      });
+
+      return {
+        response: `Plan rejected.${confirmation.notes ? ` Notes: ${confirmation.notes}` : ""}`,
+        steps,
+        plan,
+      };
+    }
+
+    appendLog(`\n✅ PLAN CONFIRMED — proceeding with execution\n\n`);
+    emit({ type: "plan_confirmed", title: "Plan approved" });
+
+    await logEvent({
+      projectId,
+      agent: "pm",
+      type: "plan_confirmed",
+      data: {},
+    });
+  } catch {
+    // Timeout or abort — treat as auto-confirm for backward compatibility
+    appendLog(`\n⚡ Plan auto-confirmed (no response within timeout)\n\n`);
+  } finally {
+    cleanupPlanFiles(runId);
+  }
+
   // 3. Execute pipeline
   const pipeline = parsePipeline(plan.pipeline);
   let lastOutput = "";
@@ -154,13 +216,12 @@ export async function orchestrate(opts: {
   appendLog(`\n${"=".repeat(80)}\n🔧 EXECUTING PIPELINE (${pipeline.length} steps)\n${"=".repeat(80)}\n\n`);
 
   for (let i = 0; i < pipeline.length; i++) {
-    // Check abort before each step
     if (isAborted()) {
       appendLog(`\n${"=".repeat(80)}\n🛑 PIPELINE ABORTED BY USER\n${"=".repeat(80)}\n`);
       appendLog(`⏰ Aborted at: ${new Date().toLocaleString()}\n`);
       appendLog(`📊 Completed ${i}/${pipeline.length} steps before abort\n\n`);
       steps.push({
-        agent: "pm" as AgentType,
+        agent: "pm",
         title: "Pipeline aborted",
         status: "failed",
         output: `Aborted by user at step ${i + 1}/${pipeline.length}`
@@ -209,6 +270,7 @@ export async function orchestrate(opts: {
       cwd: project.path,
       projectId,
       settings: projectSettings,
+      taskHint: task ? { provider: task.provider, model: task.model } : undefined,
     });
 
     // Track cost and check budget
@@ -218,7 +280,7 @@ export async function orchestrate(opts: {
       if (projectSettings.budgetLimit && runningCost > projectSettings.budgetLimit) {
         appendLog(`\n💰 BUDGET LIMIT EXCEEDED: $${runningCost.toFixed(2)} > $${projectSettings.budgetLimit}\n`);
         steps.push({
-          agent: "pm" as AgentType,
+          agent: "pm",
           title: "Budget limit exceeded",
           status: "failed",
           output: `Budget limit of $${projectSettings.budgetLimit} exceeded (current: $${runningCost.toFixed(2)})`
@@ -227,11 +289,11 @@ export async function orchestrate(opts: {
       }
     }
 
-    // Check abort after agent runs (in case it was stopped during execution)
+    // Check abort after agent runs
     if (isAborted()) {
       appendLog(`\n🛑 Abort detected after agent execution\n`);
       steps.push({
-        agent: "pm" as AgentType,
+        agent: "pm",
         title: "Pipeline aborted",
         status: "failed",
         output: `Aborted during ${stepLabel} execution`
@@ -338,27 +400,46 @@ export async function orchestrate(opts: {
   return { response: summary, steps, plan };
 }
 
-// ----- Agent Runner (all through Claude Code CLI) -----
+// ----- Agent Runner -----
 
 async function runAgent(opts: {
-  agent: AgentType;
+  agent: string;
   role?: string;
   prompt: string;
   cwd: string;
   projectId: string;
   settings?: ProjectSettings;
+  taskHint?: { provider?: string; model?: string };
 }): Promise<{ success: boolean; output: string; cost?: number }> {
   const systemPrompt = getSystemPrompt(opts.agent, opts.role);
 
-  // Get model from settings if available, otherwise use default
+  // Provider resolution chain:
+  // 1. Project settings override
+  // 2. PM plan task-level hint
+  // 3. Role .md frontmatter
+  // 4. Agent .md frontmatter
+  // 5. Auto-select by model prefix
   let { provider, model } = getProviderConfig(opts.agent, opts.role);
 
+  // Task-level hint from PM plan (Phase 7)
+  if (opts.taskHint?.model) {
+    model = opts.taskHint.model;
+    provider = opts.taskHint.provider ?? resolveProviderId(model);
+  }
+
+  // Project settings override (highest priority)
   if (opts.settings) {
     const agentSettings = opts.settings.agents[opts.agent];
-    if (agentSettings && agentSettings.model) {
-      model = agentSettings.model;
-      // Update provider based on model
-      provider = model.startsWith("gemini") ? "gemini" : "claude-code";
+    if (agentSettings) {
+      if (agentSettings.model) {
+        model = agentSettings.model;
+        provider = agentSettings.provider ?? resolveProviderId(model);
+      }
+      // Role-level override
+      if (opts.role && agentSettings.roles?.[opts.role]?.model) {
+        model = agentSettings.roles[opts.role].model!;
+        provider = agentSettings.roles[opts.role].provider ?? resolveProviderId(model);
+      }
     }
   }
 
@@ -374,7 +455,6 @@ async function runAgent(opts: {
   let costUsd: number | undefined;
 
   if (provider === "gemini") {
-    // Non-coding agents → Gemini (fast, free/cheap, no tool access)
     appendLog(`🌐 Using Gemini API (no tool access)\n\n`);
     const result = await runLLM({
       prompt: opts.prompt,
@@ -392,7 +472,6 @@ async function runAgent(opts: {
       appendLog(`💰 Cost: ${formatCost(costUsd)} (${tokensUsed.inputTokens}in/${tokensUsed.outputTokens}out)\n`);
     }
   } else {
-    // Coding agents → Claude Code CLI (file access, tools, shell)
     const stack = opts.settings?.stack || "nextjs";
     const skills = getSkillsForAgent(opts.agent, opts.role, stack);
     appendLog(`🧰 Loading skills: ${skills.join(", ") || "none"}\n`);
@@ -443,9 +522,21 @@ function buildPMPrompt(
   projectName: string,
   historyContext: string
 ): string {
+  // Inject available agents list
+  const registry = getAgentRegistry();
+  const agentsList = Object.values(registry)
+    .map((a) => {
+      const roles = Object.keys(a.roles);
+      return `- ${a.name} (${a.type}): ${a.description}${roles.length > 0 ? ` [roles: ${roles.join(", ")}]` : ""}`;
+    })
+    .join("\n");
+
   return `## Project
 Name: ${projectName}
 Path: ${projectPath}
+
+## Available Agents
+${agentsList}
 
 ## Event History
 ${historyContext}
@@ -458,7 +549,7 @@ Create an execution plan. Output your response with a JSON block as specified in
 
 function buildStepPrompt(opts: {
   step: PipelineStep;
-  task?: PMPlan["tasks"][0];
+  task?: PMPlanTask;
   userMessage: string;
   projectPath: string;
   eventsContext: string;
@@ -557,7 +648,6 @@ ${stepsSummary}`;
 function parsePMPlan(raw: string): PMPlan | null {
   const jsonMatch = raw.match(/```json\s*([\s\S]*?)\s*```/);
   if (!jsonMatch) {
-    // Try to find raw JSON object
     const braceMatch = raw.match(/\{[\s\S]*"pipeline"[\s\S]*\}/);
     if (!braceMatch) return null;
     try {
@@ -580,24 +670,32 @@ function parsePMPlan(raw: string): PMPlan | null {
 
 function parsePipeline(pipeline: string[]): PipelineStep[] {
   return pipeline.map((entry) => {
-    const [agent, role] = entry.split(":") as [AgentType, string | undefined];
+    const [agent, role] = entry.split(":");
     return { agent, role };
   });
 }
 
-function getEventType(step: PipelineStep): EventType {
-  if (step.agent === "architect") return "architecture_defined";
-  if (step.agent === "developer") {
-    if (step.role === "code") return "code_written";
-    if (step.role === "review") return "review_done";
-    if (step.role === "fix") return "fix_applied";
-    if (step.role === "devops") return "devops_configured";
+// Map-based event type resolver with fallback
+const EVENT_TYPE_MAP: Record<string, Record<string, string>> = {
+  architect: { "": "architecture_defined" },
+  developer: {
+    code: "code_written",
+    review: "review_done",
+    fix: "fix_applied",
+    devops: "devops_configured",
+  },
+  qa: {
+    automation: "tests_written",
+    manual: "browser_tested",
+  },
+};
+
+function getEventType(step: PipelineStep): string {
+  const agentMap = EVENT_TYPE_MAP[step.agent];
+  if (agentMap) {
+    return agentMap[step.role ?? ""] ?? "task_completed";
   }
-  if (step.agent === "qa") {
-    if (step.role === "automation") return "tests_written";
-    if (step.role === "manual") return "browser_tested";
-  }
-  return "task_started";
+  return "task_completed";
 }
 
 function isFailure(step: PipelineStep, output: string): boolean {
@@ -608,16 +706,13 @@ function isFailure(step: PipelineStep, output: string): boolean {
       const data = JSON.parse(jsonMatch[1]);
       if (data.approved === false) return true;
       if (data.passed === false) return true;
-      // Explicitly passed/approved → NOT a failure
       if (data.approved === true || data.passed === true) return false;
     }
   } catch { /* not JSON */ }
 
   if (step.agent === "qa") {
-    // Check for explicit failure indicators, but NOT "0 failed" or "0 failures"
     const lower = output.toLowerCase();
     if (output.includes("🔴")) return true;
-    // Match "X failed" where X > 0 (e.g., "3 failed" but not "0 failed")
     const failMatch = lower.match(/(\d+)\s+fail/);
     if (failMatch && parseInt(failMatch[1]) > 0) return true;
     return false;

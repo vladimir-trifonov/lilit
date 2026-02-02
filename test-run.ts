@@ -1,6 +1,6 @@
 /**
  * Direct orchestrator test — bypasses Next.js server.
- * Run with: cd ~/src/ai/crew && npx tsx test-run.ts
+ * Run with: cd ~/src/ai/lilit && npx tsx test-run.ts
  */
 
 import { PrismaClient } from "@prisma/client";
@@ -15,7 +15,7 @@ const adapter = new PrismaPg(pool);
 const prisma = new PrismaClient({ adapter });
 
 async function main() {
-  console.log("🚀 Starting Crew POC test...\n");
+  console.log("🚀 Starting Lilit POC test...\n");
 
   // Ensure project exists
   let project = await prisma.project.findFirst({
@@ -26,7 +26,7 @@ async function main() {
     project = await prisma.project.create({
       data: {
         name: "Counter App",
-        path: "/Users/vladimirtrifonov/src/ai/crew-test-app",
+        path: "/Users/vladimirtrifonov/src/ai/lilit-test-app",
       },
     });
   }

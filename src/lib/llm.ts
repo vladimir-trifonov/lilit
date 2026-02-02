@@ -10,7 +10,7 @@ import os from "os";
 import path from "path";
 
 // Share the same log file as claude-code.ts for unified live UI
-const LOG_FILE = path.join(os.tmpdir(), "crew-live.log");
+const LOG_FILE = path.join(os.tmpdir(), "lilit-live.log");
 
 function appendLog(text: string) {
   try { fs.appendFileSync(LOG_FILE, text); } catch {}

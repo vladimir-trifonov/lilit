@@ -13,6 +13,16 @@ interface TokenUsage {
   outputTokens: number;
 }
 
+// Dynamic pricing registry (populated at runtime)
+const customPricing: Record<string, ModelPricing> = {};
+
+/**
+ * Register pricing for a model at runtime (e.g. from provider scanning)
+ */
+export function registerModelPricing(model: string, pricing: ModelPricing) {
+  customPricing[model.toLowerCase()] = pricing;
+}
+
 // Default pricing (as of Feb 2026) - can be overridden via env vars
 const DEFAULT_PRICING: Record<string, ModelPricing> = {
   // Claude models (via API - subscription is free via CLI)
@@ -68,7 +78,7 @@ const DEFAULT_PRICING: Record<string, ModelPricing> = {
 function getModelPricing(model: string): ModelPricing {
   const modelKey = model.toLowerCase();
 
-  // Check for env var overrides
+  // Check for env var overrides first
   const inputKey = `PRICING_${modelKey.replace(/[^a-z0-9]/g, "_").toUpperCase()}_INPUT`;
   const outputKey = `PRICING_${modelKey.replace(/[^a-z0-9]/g, "_").toUpperCase()}_OUTPUT`;
 
@@ -80,6 +90,11 @@ function getModelPricing(model: string): ModelPricing {
       inputPer1M: parseFloat(envInput),
       outputPer1M: parseFloat(envOutput),
     };
+  }
+
+  // Check runtime-registered pricing
+  if (customPricing[modelKey]) {
+    return customPricing[modelKey];
   }
 
   // Return default pricing or zero if unknown

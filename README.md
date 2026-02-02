@@ -1,98 +1,46 @@
-# Crew - AI Agent Orchestration Platform
+# Lilit
 
-A production-ready web app where you describe what you want built in natural language, and a team of AI agents (PM, Developer, QA) collaborate to produce working, tested code with real-time progress visible in the UI.
+Describe what you want built, and a team of AI agents (PM, Developer, QA) collaborates to produce working, tested code. Real-time progress, cost tracking, plan confirmation before execution.
 
-## ✨ Features (February 2026)
+## Prerequisites
 
-- ✅ **Full Pipeline**: PM-driven feedback loops with automatic retry
-- ✅ **Real-Time Progress**: Live step indicators and agent output logs  
-- ✅ **Cost Tracking**: Per-pipeline and per-agent cost tracking with budget limits
-- ✅ **Settings Panel**: Project-specific model selection and configuration
-- ✅ **Stack Auto-Detection**: Automatically detect Next.js, React, Python, Django, etc.
-- ✅ **Budget Enforcement**: Automatic pipeline stop when budget exceeded
-- ✅ **FREE Mode**: $0.00 per run using Claude CLI + Gemini Flash
+- [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) installed and authenticated
+- [Docker](https://docs.docker.com/get-docker/) (for PostgreSQL)
+- Node.js 20+
+- (Optional) [Google AI API key](https://aistudio.google.com/apikey) for Gemini models
 
-## 🚀 Quick Start
+## Setup
 
 ```bash
-# Install dependencies
-npm install
-
-# Set up database
-createdb crew
-npx prisma db push
-
-# Configure (copy .env.example to .env)
-cp .env.example .env
-
-# Start dev server
-npm run dev
+cp .env.example .env   # edit with your keys
+make setup             # install deps, start postgres, push schema
+make dev               # start the app
 ```
 
-See `.env.example` and `SPEC.md` for detailed setup instructions.
+Open [http://localhost:3000](http://localhost:3000), create a project pointing to a directory, and send a message.
 
-## 📊 Architecture
+## How it works
 
-- **Frontend**: Next.js 16 + Tailwind CSS 4 + shadcn/ui
-- **Backend**: PostgreSQL + Prisma 7
-- **Agents**: Claude Code CLI (free via subscription) + Gemini API (free tier)
-- **Runtime**: Separate worker processes for long-running pipelines
+1. You send a message describing what to build
+2. **PM** creates an execution plan (you approve/reject it)
+3. Pipeline executes: Architect, Developer (code/review/fix), QA (automation/manual)
+4. Failures trigger automatic PM re-evaluation and fix cycles (up to 3)
+5. Summary delivered back to the UI
 
-## 💰 Cost Optimization
+Agents are defined as markdown files in `agents/` with YAML frontmatter. Edit them from the UI (Agents button) or directly on disk.
 
-**Recommended FREE setup:**
-```env
-PM_MODEL="gemini-2.5-flash"          # FREE
-ARCHITECT_MODEL="gemini-2.5-flash"    # FREE  
-DEVELOPER_MODEL="sonnet"              # FREE (Claude CLI subscription)
-QA_MODEL="sonnet"                     # FREE (Claude CLI subscription)
+## Makefile
+
+```
+make setup      # install + docker + prisma
+make dev        # start docker + next dev
+make stop       # stop docker
+make db-reset   # wipe and recreate database
+make build      # production build
+make typecheck  # tsc --noEmit
+make lint       # eslint
 ```
 
-**Result**: ~$0.00 per pipeline run! 🎉
+## Cost
 
-See `.env.example` for advanced pricing configuration.
-
-## 📖 Documentation
-
-- `SPEC.md` - Technical specification and architecture
-- `.env.example` - Environment variable documentation
-- `test-prompts.md` - Example prompts for testing
-
-## 🛠️ Key Components
-
-| Component | Purpose |
-|-----------|---------|
-| `src/lib/orchestrator.ts` | Main pipeline router with PM-driven execution |
-| `src/lib/agents.ts` | Agent definitions with role switching |
-| `src/lib/cost-calculator.ts` | Model pricing and cost tracking |
-| `src/lib/stack-detector.ts` | Auto-detect tech stack from files |
-| `src/components/pipeline-steps.tsx` | Real-time step indicators |
-| `src/components/cost-display.tsx` | Live cost tracking display |
-| `src/components/settings-panel.tsx` | Project configuration UI |
-
-## 🎯 Usage Example
-
-```typescript
-// 1. Create a project (auto-detects stack)
-// 2. Send a request:
-"Build a to-do list app with Next.js and localStorage"
-
-// 3. Watch the pipeline:
-// PM → Developer:code → Developer:review → QA:manual → Done
-// Total cost: $0.00 | Time: ~8 minutes
-```
-
-## 🔧 Configuration
-
-All settings are configurable via:
-1. **Environment variables** (`.env`) - Global defaults
-2. **Project settings** (UI) - Per-project overrides  
-3. **Database** (Prisma) - Persistent storage
-
-## 📝 License
-
-MIT
-
----
-
-**Built with ❤️ using Claude Code CLI**
+Default config costs $0.00/run: Claude CLI (subscription) for Developer/QA, Gemini free tier for PM/Architect. Configure per-agent models in Settings or via env vars.

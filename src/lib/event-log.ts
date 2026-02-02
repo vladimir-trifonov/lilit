@@ -6,18 +6,26 @@
 
 import { prisma } from "./prisma";
 
-export type EventType =
-  | "plan_created"        // PM created execution plan
-  | "architecture_defined" // Architect defined tech stack
-  | "task_started"        // Agent started working on task
-  | "code_written"        // Dev:code produced code
-  | "review_done"         // Dev:review completed review
-  | "fix_applied"         // Dev:fix applied a fix
-  | "devops_configured"   // Dev:devops set up infra
-  | "tests_written"       // QA:automation wrote/ran tests
-  | "browser_tested"      // QA:manual tested in browser
-  | "bug_found"           // QA found a bug
-  | "feedback_routed"     // PM re-evaluated after failure
+export type EventType = string;
+
+// Well-known event types (not exhaustive — new agents can add their own)
+export const EVENT_TYPES = {
+  plan_created: "plan_created",
+  plan_awaiting_confirmation: "plan_awaiting_confirmation",
+  plan_confirmed: "plan_confirmed",
+  plan_rejected: "plan_rejected",
+  architecture_defined: "architecture_defined",
+  task_started: "task_started",
+  task_completed: "task_completed",
+  code_written: "code_written",
+  review_done: "review_done",
+  fix_applied: "fix_applied",
+  devops_configured: "devops_configured",
+  tests_written: "tests_written",
+  browser_tested: "browser_tested",
+  bug_found: "bug_found",
+  feedback_routed: "feedback_routed",
+} as const;
 
 export interface EventData {
   [key: string]: unknown;

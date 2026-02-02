@@ -12,9 +12,9 @@ export interface ClaudeCodeResult {
 }
 
 // Shared log file for live UI polling
-const LOG_FILE = path.join(os.tmpdir(), "crew-live.log");
-const ABORT_FILE = path.join(os.tmpdir(), "crew-abort.flag");
-const PID_FILE = path.join(os.tmpdir(), "crew-worker.pid");
+const LOG_FILE = path.join(os.tmpdir(), "lilit-live.log");
+const ABORT_FILE = path.join(os.tmpdir(), "lilit-abort.flag");
+const PID_FILE = path.join(os.tmpdir(), "lilit-worker.pid");
 
 export function getLogFile() { return LOG_FILE; }
 export function getAbortFile() { return ABORT_FILE; }
@@ -105,8 +105,8 @@ export async function runClaudeCode(opts: {
   const startTime = Date.now();
   const tmpDir = os.tmpdir();
   const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-  const promptFile = path.join(tmpDir, `crew-prompt-${id}.txt`);
-  const sysFile = path.join(tmpDir, `crew-sys-${id}.txt`);
+  const promptFile = path.join(tmpDir, `lilit-prompt-${id}.txt`);
+  const sysFile = path.join(tmpDir, `lilit-sys-${id}.txt`);
 
   fs.writeFileSync(promptFile, prompt, "utf-8");
   appendLog(`\n${"=".repeat(60)}\n🚀 [${agentLabel}] Started — ${new Date().toLocaleTimeString()}\n${"=".repeat(60)}\n`);
@@ -114,21 +114,21 @@ export async function runClaudeCode(opts: {
   try {
     // Build command — use $ENV_VAR instead of $(cat file) to avoid
     // shell expansion of backticks/$ in prompt content (PM plans have JSON code fences)
-    const emptyMcp = path.join(tmpDir, "crew-mcp-empty.json");
+    const emptyMcp = path.join(tmpDir, "lilit-mcp-empty.json");
     if (!fs.existsSync(emptyMcp)) {
       fs.writeFileSync(emptyMcp, '{"mcpServers":{}}', "utf-8");
     }
 
-    let cmd = `claude -p "$CREW_PROMPT" --model ${model} --output-format text --permission-mode bypassPermissions --mcp-config '${emptyMcp}' --strict-mcp-config`;
+    let cmd = `claude -p "$LILIT_PROMPT" --model ${model} --output-format text --permission-mode bypassPermissions --mcp-config '${emptyMcp}' --strict-mcp-config`;
 
     const execEnv = {
       ...process.env,
-      CREW_PROMPT: prompt,
+      LILIT_PROMPT: prompt,
     } as NodeJS.ProcessEnv;
 
     if (systemPrompt) {
-      cmd += ` --system-prompt "$CREW_SYS_PROMPT"`;
-      (execEnv as Record<string, string>).CREW_SYS_PROMPT = systemPrompt;
+      cmd += ` --system-prompt "$LILIT_SYS_PROMPT"`;
+      (execEnv as Record<string, string>).LILIT_SYS_PROMPT = systemPrompt;
     }
 
     const output = execSync(cmd, {

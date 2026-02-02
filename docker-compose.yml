@@ -1,0 +1,22 @@
+name: lilit
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    container_name: lilit-postgres
+    ports:
+      - "5434:5432"
+    environment:
+      POSTGRES_USER: lilit
+      POSTGRES_PASSWORD: lilit
+      POSTGRES_DB: lilit
+    volumes:
+      - lilit-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U lilit -d lilit"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+volumes:
+  lilit-data:

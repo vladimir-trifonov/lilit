@@ -13,7 +13,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Crew — AI Development Team",
+  title: "Lilit — AI Development Team",
   description: "Chat with your AI dev team",
 };
 

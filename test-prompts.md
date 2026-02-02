@@ -1,4 +1,4 @@
-# Test Prompts for Crew
+# Test Prompts for Lilit
 
 ## Prompt 1: Simple Counter App (Quick — tests full pipeline)
 

@@ -9,7 +9,10 @@ import { PipelineSteps } from "@/components/pipeline-steps";
 import { CostDisplay } from "@/components/cost-display";
 import { SettingsPanel } from "@/components/settings-panel";
 import { EnhancedLogPanel } from "@/components/enhanced-log-panel";
+import { PlanConfirmation } from "@/components/plan-confirmation";
+import { AgentsPanel } from "@/components/agents-panel";
 import { ConversationSelector } from "@/components/conversation-selector";
+import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from "@/components/ui/resizable";
 import { parseLogSteps } from "@/lib/log-parser";
 import type { StepInfo } from "@/types/pipeline";
 
@@ -38,10 +41,13 @@ export function Chat({ project }: { project: Project }) {
   const [showConversations, setShowConversations] = useState(false);
   const [useEnhancedLog, setUseEnhancedLog] = useState(true);
   const [currentConversationId, setCurrentConversationId] = useState<string | null>(null);
+  const [showAgents, setShowAgents] = useState(false);
+  const [pendingPlan, setPendingPlan] = useState<{ runId: string; plan: unknown } | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const logRef = useRef<HTMLPreElement>(null);
   const logOffsetRef = useRef(0);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const planPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // Parse pipeline steps from log content
   const pipelineSteps = useMemo(() => parseLogSteps(logContent), [logContent]);
@@ -106,6 +112,34 @@ export function Chat({ project }: { project: Project }) {
     }
     return () => {
       if (pollRef.current) clearInterval(pollRef.current);
+    };
+  }, [loading]);
+
+  // Poll for pending plan while loading
+  useEffect(() => {
+    if (loading) {
+      planPollRef.current = setInterval(async () => {
+        try {
+          const res = await fetch("/api/plan");
+          const data = await res.json();
+          if (data.status === "pending" && data.plan) {
+            setPendingPlan({ runId: data.runId, plan: data.plan });
+          } else {
+            setPendingPlan(null);
+          }
+        } catch {
+          // ignore
+        }
+      }, 2000);
+    } else {
+      if (planPollRef.current) {
+        clearInterval(planPollRef.current);
+        planPollRef.current = null;
+      }
+      setPendingPlan(null);
+    }
+    return () => {
+      if (planPollRef.current) clearInterval(planPollRef.current);
     };
   }, [loading]);
 
@@ -220,6 +254,14 @@ export function Chat({ project }: { project: Project }) {
           <Button
             variant="ghost"
             size="sm"
+            onClick={() => setShowAgents(true)}
+            className="text-xs text-zinc-400"
+          >
+            🤖 Agents
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
             onClick={() => setShowSettings(true)}
             className="text-xs text-zinc-400"
           >
@@ -249,94 +291,115 @@ export function Chat({ project }: { project: Project }) {
       </div>
 
       {/* Main content area */}
-      <div className="flex-1 flex min-h-0">
-        {/* Messages */}
-        <ScrollArea className={`p-4 ${showLog && (loading || logContent) ? "w-1/2" : "w-full"}`}>
-          <div className="max-w-3xl mx-auto space-y-4">
-            {messages.length === 0 && !loading && (
-              <div className="text-center text-muted-foreground py-20">
-                <p className="text-lg mb-1">Start building</p>
-                <p className="text-sm">Tell the crew what to build.</p>
-              </div>
-            )}
-
-            {messages.map((msg) => (
-              <MessageBubble key={msg.id} message={msg} />
-            ))}
-
-            {loading && (
-              <div className="space-y-3 py-2">
-                <div className="flex items-center gap-2 text-zinc-500 text-sm">
-                  <span className="animate-spin">⟳</span>
-                  <span>Pipeline running...</span>
-                </div>
-                {pipelineSteps.length > 0 && (
-                  <PipelineSteps steps={pipelineSteps} className="ml-6" />
+      <div className="flex-1 min-h-0 h-full overflow-hidden">
+        <ResizablePanelGroup orientation="horizontal">
+          <ResizablePanel defaultSize={showLog && (loading || logContent) ? 60 : 100} minSize={30}>
+            {/* Messages */}
+            <ScrollArea className="h-full w-full">
+              <div className="max-w-3xl mx-auto space-y-4 p-4">
+                {messages.length === 0 && !loading && (
+                  <div className="text-center text-muted-foreground py-20">
+                    <p className="text-lg mb-1">Start building</p>
+                    <p className="text-sm">Tell Lilit what to build.</p>
+                  </div>
                 )}
-                {currentConversationId && (
-                  <CostDisplay
-                    projectId={project.id}
-                    conversationId={currentConversationId}
-                    compact
-                    className="ml-6"
-                  />
-                )}
-              </div>
-            )}
 
-            <div ref={scrollRef} />
-          </div>
-        </ScrollArea>
+                {messages.map((msg) => (
+                  <MessageBubble key={msg.id} message={msg} />
+                ))}
 
-        {/* Log panel (right side) — polls /api/logs */}
-        {showLog && (loading || logContent) && (
-          <div className="w-1/2 border-l border-border flex flex-col min-h-0">
-            <div className="h-10 border-b border-border flex items-center px-3 gap-2 shrink-0">
-              <span className="text-xs font-medium text-muted-foreground">📋 Agent Output</span>
-              {currentAgent && (
-                <Badge variant="secondary" className="text-[10px] px-1.5 py-0">
-                  {currentAgent}
-                </Badge>
-              )}
-              <div className="ml-auto flex items-center gap-2">
-                <Button
-                  onClick={() => setUseEnhancedLog(!useEnhancedLog)}
-                  variant="ghost"
-                  size="sm"
-                  className="h-6 px-2 text-[10px]"
-                  title={useEnhancedLog ? "Switch to simple view" : "Switch to enhanced view"}
-                >
-                  {useEnhancedLog ? "Simple" : "Enhanced"}
-                </Button>
                 {loading && (
-                  <span className="text-[10px] text-zinc-600 animate-pulse">live</span>
+                  <div className="space-y-3 py-2">
+                    <div className="flex items-center gap-2 text-zinc-500 text-sm">
+                      <span className="animate-spin">⟳</span>
+                      <span>Pipeline running...</span>
+                    </div>
+                    {pipelineSteps.length > 0 && (
+                      <PipelineSteps steps={pipelineSteps} className="ml-6" />
+                    )}
+                    {pendingPlan && (
+                      <div className="ml-6">
+                        <PlanConfirmation
+                          runId={pendingPlan.runId}
+                          plan={pendingPlan.plan as { analysis: string; needsArchitect: boolean; tasks: { id: number; title: string; description: string; agent: string; role: string; acceptanceCriteria?: string[]; provider?: string; model?: string }[]; pipeline: string[] }}
+                          onConfirmed={() => setPendingPlan(null)}
+                          onRejected={() => setPendingPlan(null)}
+                        />
+                      </div>
+                    )}
+                    {currentConversationId && (
+                      <CostDisplay
+                        projectId={project.id}
+                        conversationId={currentConversationId}
+                        compact
+                        className="ml-6"
+                      />
+                    )}
+                  </div>
                 )}
-              </div>
-            </div>
 
-            {useEnhancedLog ? (
-              <EnhancedLogPanel
-                logContent={logContent}
-                loading={loading}
-                currentAgent={currentAgent}
-              />
-            ) : (
-              <pre
-                ref={logRef}
-                className="flex-1 p-3 text-xs text-muted-foreground font-mono overflow-auto bg-muted/10 whitespace-pre-wrap break-words"
-              >
-                {logContent || "Waiting for output..."}
-              </pre>
-            )}
-          </div>
-        )}
+                <div ref={scrollRef} />
+              </div>
+            </ScrollArea>
+          </ResizablePanel>
+
+          {showLog && (loading || logContent) && (
+            <>
+              <ResizableHandle withHandle />
+              <ResizablePanel defaultSize={40} minSize={20}>
+                {/* Log panel (right side) — polls /api/logs */}
+                <div className="flex flex-col h-full min-h-0">
+                  <div className="h-10 border-b border-border flex items-center px-3 gap-2 shrink-0 bg-background/50 backdrop-blur-sm z-10">
+                    <span className="text-xs font-medium text-muted-foreground">📋 Agent Output</span>
+                    {currentAgent && (
+                      <Badge variant="secondary" className="text-[10px] px-1.5 py-0">
+                        {currentAgent}
+                      </Badge>
+                    )}
+                    <div className="ml-auto flex items-center gap-2">
+                      <Button
+                        onClick={() => setUseEnhancedLog(!useEnhancedLog)}
+                        variant="ghost"
+                        size="sm"
+                        className="h-6 px-2 text-[10px]"
+                        title={useEnhancedLog ? "Switch to simple view" : "Switch to enhanced view"}
+                      >
+                        {useEnhancedLog ? "Simple" : "Enhanced"}
+                      </Button>
+                      {loading && (
+                        <span className="text-[10px] text-zinc-600 animate-pulse">live</span>
+                      )}
+                    </div>
+                  </div>
+
+                  {useEnhancedLog ? (
+                    <div className="flex-1 min-h-0 overflow-hidden">
+                      <EnhancedLogPanel
+                        logContent={logContent}
+                        loading={loading}
+                        currentAgent={currentAgent}
+                      />
+                    </div>
+                  ) : (
+                    <pre
+                      ref={logRef}
+                      className="flex-1 p-3 text-xs text-muted-foreground font-mono overflow-auto bg-muted/10 whitespace-pre-wrap break-words min-h-0"
+                    >
+                      {logContent || "Waiting for output..."}
+                    </pre>
+                  )}
+                </div>
+              </ResizablePanel>
+            </>
+          )}
+        </ResizablePanelGroup>
       </div>
 
       {/* Input */}
       <div className="border-t border-border p-4">
         <div className="max-w-3xl mx-auto flex gap-2">
           <Textarea
-            placeholder="Tell the crew what to build..."
+            placeholder="Tell Lilit what to build..."
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
@@ -360,6 +423,11 @@ export function Chat({ project }: { project: Project }) {
           projectId={project.id}
           onClose={() => setShowSettings(false)}
         />
+      )}
+
+      {/* Agents Panel */}
+      {showAgents && (
+        <AgentsPanel onClose={() => setShowAgents(false)} />
       )}
 
       {/* Conversation History Panel */}
@@ -419,13 +487,13 @@ function MessageBubble({ message }: { message: Message }) {
             ? "bg-primary text-primary-foreground shadow-sm"
             : isSystem
               ? "bg-destructive/10 text-destructive border border-destructive/20"
-              : "bg-secondary text-secondary-foreground"
+              : "bg-surface text-surface-foreground border border-border/50"
         }`}
       >
         {!isUser && !isSystem && (
-          <div className="text-xs text-muted-foreground mb-1 font-medium">Crew</div>
+          <div className="text-xs text-muted-foreground mb-1 font-medium">Lilit</div>
         )}
-        <div className="text-sm whitespace-pre-wrap">{message.content}</div>
+        <div className="text-sm whitespace-pre-wrap break-words">{message.content}</div>
 
         {steps.length > 0 && (
           <div className="mt-3 pt-2 border-t border-zinc-700 space-y-1">

@@ -1,7 +1,7 @@
 /**
  * Skills system — loads skill markdown files and injects them into agent prompts.
  * 
- * Skills are stored in: ~/src/ai/crew/skills/{skill-name}/SKILL.md
+ * Skills are stored in: ~/src/ai/lilit/skills/{skill-name}/SKILL.md
  * They get attached to agents based on project config or PM selection.
  * 
  * Skill format matches the industry standard (Claude Code, Codex, Gemini CLI etc.)

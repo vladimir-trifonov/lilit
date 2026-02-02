@@ -1,4 +1,4 @@
-# Crew — AI Agent Orchestration Platform
+# Lilit — AI Agent Orchestration Platform
 
 ## Spec Document (POC Complete — Feb 2, 2026)
 
@@ -34,7 +34,7 @@ User prompt → PM (plan) → Developer:code → Developer:review
 | Layer | Technology |
 |-------|------------|
 | Framework | Next.js 16.1.6 (Turbopack) |
-| DB | PostgreSQL (`crew:crew@localhost:5432/crew`) |
+| DB | PostgreSQL (`lilit:lilit@localhost:5434/lilit`) |
 | ORM | Prisma 7 |
 | UI | Tailwind CSS 4 + shadcn/ui (dark theme) |
 | Agent Runtime | Claude Code CLI (`claude -p`) |
@@ -60,8 +60,8 @@ Claude API (Anthropic)
 **Key design decisions:**
 - Worker process is spawned separately (Next.js Turbopack kills long-running child processes)
 - `execSync` with temp files (async `spawn` hangs from Node.js context with Claude Code CLI)
-- Prompts passed via `$CREW_PROMPT` env variable (NOT `$(cat file)` — shell expansion breaks on backticks/$ in prompt content)
-- System prompts via `$CREW_SYS_PROMPT` env variable
+- Prompts passed via `$LILIT_PROMPT` env variable (NOT `$(cat file)` — shell expansion breaks on backticks/$ in prompt content)
+- System prompts via `$LILIT_SYS_PROMPT` env variable
 - `--strict-mcp-config` with empty JSON to prevent loading user's MCP servers
 - `--permission-mode bypassPermissions` for full file access
 - `--output-format text` (stream-json hangs from spawn)
@@ -72,7 +72,7 @@ Claude API (Anthropic)
 ## 3. File Structure
 
 ```
-~/src/ai/crew/
+~/src/ai/lilit/
 ├── prisma/
 │   ├── schema.prisma          # DB schema (Project, Conversation, Message, Task, AgentRun, EventLog)
 │   └── prisma.config.ts
@@ -91,7 +91,7 @@ Claude API (Anthropic)
 │   │   ├── page.tsx            # Main page (project selector + chat)
 │   │   └── api/
 │   │       ├── chat/route.ts   # POST: spawn worker, run pipeline. GET: message history
-│   │       ├── logs/route.ts   # GET: poll /tmp/crew-live.log (offset-based)
+│   │       ├── logs/route.ts   # GET: poll /tmp/lilit-live.log (offset-based)
 │   │       ├── abort/route.ts  # POST: abort active pipeline
 │   │       └── projects/route.ts # CRUD for projects
 │   ├── components/
@@ -158,9 +158,9 @@ Each agent has detailed system prompts defining output format (JSON for PM/Revie
 runClaudeCode({ prompt, cwd, model, systemPrompt, timeoutMs, agentLabel })
 ```
 
-- Writes prompt/system-prompt to environment variables (`$CREW_PROMPT`, `$CREW_SYS_PROMPT`)
-- Runs: `claude -p "$CREW_PROMPT" --model sonnet --output-format text --permission-mode bypassPermissions --mcp-config <empty> --strict-mcp-config`
-- Appends output to `/tmp/crew-live.log` for UI polling
+- Writes prompt/system-prompt to environment variables (`$LILIT_PROMPT`, `$LILIT_SYS_PROMPT`)
+- Runs: `claude -p "$LILIT_PROMPT" --model sonnet --output-format text --permission-mode bypassPermissions --mcp-config <empty> --strict-mcp-config`
+- Appends output to `/tmp/lilit-live.log` for UI polling
 - Supports abort via `abortActiveProcess()` (sets flag, checked between steps)
 - Default timeout: 30 minutes
 
@@ -179,7 +179,7 @@ Append-only event log in PostgreSQL. Each agent run produces an event. Events ar
 ### 4.6 Chat UI (chat.tsx)
 
 Split view:
-- **Left panel**: Chat messages (user blue, crew dark gray, errors red)
+- **Left panel**: Chat messages (user blue, lilit dark gray, errors red)
 - **Right panel**: Live log output (polls `/api/logs?offset=N` every 1.5s)
 - **Header**: Project name, Hide/Show Log toggle, Stop button (abort)
 - **Input**: Textarea with Enter to send, disabled during pipeline
@@ -205,7 +205,7 @@ EventLog → append-only, typed events with JSON data
 ## 6. Known Issues & Bugs Fixed
 
 ### Fixed ✅
-1. **Shell expansion bug**: `$(cat file)` inside double quotes caused bash to interpret backticks and `$` in prompt content. Fixed by using `$CREW_PROMPT` env variable.
+1. **Shell expansion bug**: `$(cat file)` inside double quotes caused bash to interpret backticks and `$` in prompt content. Fixed by using `$LILIT_PROMPT` env variable.
 2. **"0 failed" infinite loop**: QA output "15 passed, 0 failed" triggered `isFailure()` because it matched "fail" substring. Fixed by parsing the number before "fail".
 3. **MCP server hang**: User's personal MCP servers loaded when spawning Claude Code CLI, causing hangs. Fixed with `--strict-mcp-config` + empty config JSON.
 4. **OAuth token hang**: OAuth token worked from terminal but caused hangs from spawn. Switched to `ANTHROPIC_API_KEY`.
@@ -216,7 +216,7 @@ EventLog → append-only, typed events with JSON data
 3. **SSE output events don't flush**: `agent_start`/`agent_done` SSE events work, but `output` chunk events never reach the browser (likely Next.js dev server buffering). Workaround: file-based polling. → See 7.4.1
 4. **Orphan processes**: Claude Code CLI IDE integration leaves ~20+ background processes. The `--strict-mcp-config` flag prevents interaction, but they consume RAM. → See 7.4.2
 5. **No concurrent agent tracking**: `activeProcess` is a module-level singleton — only one process tracked at a time. → See 7.3.3
-6. **Port conflict**: QA agent starts dev server on port 3000 (same as Crew). Needs dynamic port or port isolation. → See 7.3.6
+6. **Port conflict**: QA agent starts dev server on port 3000 (same as Lilit). Needs dynamic port or port isolation. → See 7.3.6
 
 ---
 
@@ -338,7 +338,7 @@ GOOGLE_GENERATIVE_AI_API_KEY="..."   # from https://aistudio.google.com/apikey o
 - [ ] **PR creation**: Option to push branch and create GitHub PR with pipeline summary as description
 
 #### 7.3.6 Port Isolation
-- [ ] **Dynamic port assignment**: QA agent gets unique port (3001+) for dev server, avoiding conflict with Crew on :3000
+- [ ] **Dynamic port assignment**: QA agent gets unique port (3001+) for dev server, avoiding conflict with Lilit on :3000
 - [ ] **Port pool**: Track assigned ports, release on step completion
 - [ ] **Base URL injection**: Pass `BASE_URL=http://localhost:<port>` to QA agent's Playwright config
 
@@ -392,16 +392,16 @@ GOOGLE_GENERATIVE_AI_API_KEY="..."   # from https://aistudio.google.com/apikey o
 - ANTHROPIC_API_KEY with credits
 
 # Setup
-cd ~/src/ai/crew
+cd ~/src/ai/lilit
 npm install
 npx prisma db push   # or npx prisma migrate dev
 npm run dev           # starts on port 3000
 
 # DB
-psql -U crew -d crew  # direct access
+psql -U lilit -d lilit  # direct access
 
 # .env
-DATABASE_URL="postgresql://crew:crew@localhost:5432/crew"
+DATABASE_URL="postgresql://lilit:lilit@localhost:5434/lilit"
 # ANTHROPIC_API_KEY not needed — Claude Code CLI uses subscription auth
 GOOGLE_GENERATIVE_AI_API_KEY="..."  # Gemini for PM/Architect/Summary
 ```
@@ -410,8 +410,8 @@ GOOGLE_GENERATIVE_AI_API_KEY="..."  # Gemini for PM/Architect/Summary
 
 ## 9. Test Projects
 
-- `~/src/ai/crew-test-app/` — Counter App (first test)
-- `~/src/ai/crew-test-app-2/` — To-Do List App (successful full pipeline test)
+- `~/src/ai/lilit-test-app/` — Counter App (first test)
+- `~/src/ai/lilit-test-app-2/` — To-Do List App (successful full pipeline test)
 
 Test prompt that works: "Build a to-do list app with Next.js and localStorage"
 

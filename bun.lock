@@ -2,7 +2,7 @@
   "lockfileVersion": 1,
   "workspaces": {
     "": {
-      "name": "crew",
+      "name": "lilit",
       "dependencies": {
         "@ai-sdk/anthropic": "^3.0.35",
         "@ai-sdk/google": "^3.0.20",
