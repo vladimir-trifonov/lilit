@@ -23,12 +23,14 @@ export default function Home() {
   const [activeProject, setActiveProject] = useState<Project | null>(null);
   const [isCollapsed, setIsCollapsed] = useState(false);
   const [runningProjectIds, setRunningProjectIds] = useState<Set<string>>(new Set());
-  const [splashDone, setSplashDone] = useState(() => {
-    if (typeof window !== "undefined") {
-      return localStorage.getItem(SPLASH_SEEN_KEY) === "1";
+  const [splashDone, setSplashDone] = useState(false);
+
+  // Check localStorage after hydration to avoid SSR mismatch
+  useEffect(() => {
+    if (localStorage.getItem(SPLASH_SEEN_KEY) === "1") {
+      setSplashDone(true);
     }
-    return false;
-  });
+  }, []);
 
   // Load projects and restore active project from localStorage
   useEffect(() => {
