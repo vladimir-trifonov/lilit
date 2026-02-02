@@ -2,7 +2,7 @@ name: lilit
 
 services:
   postgres:
-    image: postgres:17-alpine
+    image: pgvector/pgvector:pg17
     container_name: lilit-postgres
     ports:
       - "5434:5432"
@@ -18,5 +18,47 @@ services:
       timeout: 3s
       retries: 5
 
+  app:
+    build: .
+    ports:
+      - "3000:3000"
+    environment:
+      DATABASE_URL: "postgresql://lilit:lilit@postgres:5432/lilit"
+      GOOGLE_GENERATIVE_AI_API_KEY: "${GOOGLE_GENERATIVE_AI_API_KEY}"
+      OLLAMA_BASE_URL: "http://ollama:11434"
+    volumes:
+      # Mount source code for hot reload in development
+      - .:/app
+      # Don't mount node_modules — preserve container's installed deps
+      - /app/node_modules
+      # Mount Claude CLI auth from host
+      - ~/.claude:/root/.claude:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      ollama:
+        condition: service_healthy
+    develop:
+      watch:
+        - action: rebuild
+          path: ./package.json
+        - action: rebuild
+          path: ./package-lock.json
+
+  ollama:
+    image: ollama/ollama:latest
+    container_name: lilit-ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama-data:/root/.ollama
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:11434/api/tags || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
 volumes:
   lilit-data:
+  ollama-data:

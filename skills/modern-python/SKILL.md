@@ -1,3 +1,10 @@
+---
+name: modern-python
+description: Modern Python tooling and best practices using uv, ruff, ty, and pytest
+tags: [python, code]
+agents: [developer]
+---
+
 # Modern Python
 
 Modern Python tooling and best practices using uv, ruff, ty, and pytest. Based on patterns from [trailofbits/cookiecutter-python](https://github.com/trailofbits/cookiecutter-python).

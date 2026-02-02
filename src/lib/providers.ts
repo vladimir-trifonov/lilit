@@ -1,9 +1,14 @@
 /**
  * Provider registry — runtime detection of available AI providers.
- * Replaces hardcoded Provider type with dynamic scanning.
+ * Model constants live in models.ts (client-safe).
+ * This file adds runtime detection (server-only).
  */
 
 import { execSync } from "child_process";
+import { CLAUDE_MODELS, GEMINI_MODELS } from "./models";
+
+// Re-export model constants so server files can import from one place
+export { CLAUDE_MODELS, GEMINI_MODELS, DEFAULT_CLAUDE_MODEL, DEFAULT_GEMINI_MODEL } from "./models";
 
 export interface ProviderCapabilities {
   fileAccess: boolean;
@@ -28,7 +33,7 @@ function detectClaudeCode(): ProviderInfo {
     id: "claude-code",
     name: "Claude Code CLI",
     available: false,
-    models: ["sonnet", "opus", "haiku"],
+    models: [...CLAUDE_MODELS],
     capabilities: {
       fileAccess: true,
       shellAccess: true,
@@ -52,12 +57,7 @@ function detectGemini(): ProviderInfo {
     id: "gemini",
     name: "Google Gemini",
     available: false,
-    models: [
-      "gemini-2.5-flash",
-      "gemini-3-pro-preview",
-      "gemini-3-pro-high",
-      "gemini-3-pro-low",
-    ],
+    models: [...GEMINI_MODELS],
     capabilities: {
       fileAccess: false,
       shellAccess: false,
@@ -106,4 +106,30 @@ export async function getProviderForModel(modelId: string): Promise<ProviderInfo
 export function resolveProviderId(model: string): string {
   if (model.startsWith("gemini")) return "gemini";
   return "claude-code";
+}
+
+// Agents that produce text-only output and can run on prompt-only providers
+const PROMPT_ONLY_AGENTS = new Set(["pm"]);
+
+/**
+ * Check if an agent can fall back to a given provider.
+ * Full-capability providers (file+tool access) can serve any agent.
+ * Prompt-only providers (Gemini) can only serve prompt-only agents (PM).
+ */
+export function canFallbackTo(agentType: string, provider: ProviderInfo): boolean {
+  if (provider.capabilities.fileAccess && provider.capabilities.toolUse) return true;
+  return PROMPT_ONLY_AGENTS.has(agentType);
+}
+
+/**
+ * Pick the cheapest available model (for summaries, lightweight tasks).
+ * Prefers gemini flash if available, falls back to claude haiku.
+ */
+export async function getCheapestAvailableModel(): Promise<{ provider: string; model: string }> {
+  const providers = await getAvailableProviders();
+  const gemini = providers.find((p) => p.id === "gemini" && p.available);
+  if (gemini) {
+    return { provider: "gemini", model: gemini.models[0] };
+  }
+  return { provider: "claude-code", model: CLAUDE_MODELS[CLAUDE_MODELS.length - 1] }; // haiku
 }

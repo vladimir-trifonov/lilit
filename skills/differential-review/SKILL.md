@@ -1,3 +1,10 @@
+---
+name: differential-review
+description: Security-focused differential review of code changes with git history analysis and blast radius estimation
+tags: [review, security]
+agents: [developer]
+---
+
 # Differential Review
 
 Security-focused differential review of code changes with git history analysis and blast radius estimation.

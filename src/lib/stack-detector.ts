@@ -1,10 +1,10 @@
 /**
- * Auto-detect tech stack from project files
+ * Auto-detect tech stack from project files.
+ * Returns a freeform string — not limited to a fixed set.
  */
 
 import fs from "fs";
 import path from "path";
-import type { StackType } from "@/types/settings";
 
 interface StackIndicators {
   files: string[];
@@ -12,30 +12,30 @@ interface StackIndicators {
   priority: number;
 }
 
-const STACK_INDICATORS: Record<StackType, StackIndicators> = {
+const STACK_INDICATORS: Record<string, StackIndicators> = {
   nextjs: {
     files: ["next.config.js", "next.config.mjs", "next.config.ts", "app/layout.tsx", "app/page.tsx"],
-    patterns: [/"next":\s*"[\d.]+"/],
+    patterns: [/"next":\s*"[\d.^~]+"/],
     priority: 10,
   },
   react: {
     files: ["src/App.tsx", "src/App.jsx", "public/index.html"],
-    patterns: [/"react":\s*"[\d.]+"/],
+    patterns: [/"react":\s*"[\d.^~]+"/],
     priority: 8,
   },
   vue: {
     files: ["vue.config.js", "src/App.vue", "vite.config.ts"],
-    patterns: [/"vue":\s*"[\d.]+"/],
+    patterns: [/"vue":\s*"[\d.^~]+"/],
     priority: 8,
   },
   svelte: {
     files: ["svelte.config.js", "src/App.svelte"],
-    patterns: [/"svelte":\s*"[\d.]+"/],
+    patterns: [/"svelte":\s*"[\d.^~]+"/],
     priority: 8,
   },
   nodejs: {
     files: ["package.json", "index.js", "server.js", "app.js"],
-    patterns: [/"express":\s*"[\d.]+"/],
+    patterns: [/"express":\s*"[\d.^~]+"/],
     priority: 5,
   },
   django: {
@@ -56,66 +56,49 @@ const STACK_INDICATORS: Record<StackType, StackIndicators> = {
 };
 
 /**
- * Detect stack from project directory
+ * Detect stack from project directory. Returns a plain string or null.
  */
-export async function detectStack(projectPath: string): Promise<StackType | null> {
-  const scores: Record<StackType, number> = {
-    nextjs: 0,
-    react: 0,
-    vue: 0,
-    svelte: 0,
-    nodejs: 0,
-    python: 0,
-    django: 0,
-    fastapi: 0,
-  };
+export async function detectStack(projectPath: string): Promise<string | null> {
+  const scores: Record<string, number> = {};
 
-  // Check for indicator files
+  for (const stack of Object.keys(STACK_INDICATORS)) {
+    scores[stack] = 0;
+  }
+
   for (const [stack, indicators] of Object.entries(STACK_INDICATORS)) {
     for (const file of indicators.files) {
       const filePath = path.join(projectPath, file);
       if (fs.existsSync(filePath)) {
-        scores[stack as StackType] += indicators.priority;
+        scores[stack] += indicators.priority;
       }
     }
 
-    // Check patterns in package.json / requirements.txt
     if (indicators.patterns) {
       const packageJson = path.join(projectPath, "package.json");
       const requirements = path.join(projectPath, "requirements.txt");
 
-      if (fs.existsSync(packageJson)) {
-        try {
-          const content = fs.readFileSync(packageJson, "utf-8");
-          for (const pattern of indicators.patterns) {
-            if (pattern.test(content)) {
-              scores[stack as StackType] += indicators.priority;
+      for (const filePath of [packageJson, requirements]) {
+        if (fs.existsSync(filePath)) {
+          try {
+            const content = fs.readFileSync(filePath, "utf-8");
+            for (const pattern of indicators.patterns) {
+              if (pattern.test(content)) {
+                scores[stack] += indicators.priority;
+              }
             }
-          }
-        } catch {}
-      }
-
-      if (fs.existsSync(requirements)) {
-        try {
-          const content = fs.readFileSync(requirements, "utf-8");
-          for (const pattern of indicators.patterns) {
-            if (pattern.test(content)) {
-              scores[stack as StackType] += indicators.priority;
-            }
-          }
-        } catch {}
+          } catch {}
+        }
       }
     }
   }
 
-  // Find stack with highest score
-  let bestStack: StackType | null = null;
+  let bestStack: string | null = null;
   let bestScore = 0;
 
   for (const [stack, score] of Object.entries(scores)) {
     if (score > bestScore) {
       bestScore = score;
-      bestStack = stack as StackType;
+      bestStack = stack;
     }
   }
 
@@ -125,10 +108,11 @@ export async function detectStack(projectPath: string): Promise<StackType | null
 /**
  * Validate project path exists and is accessible
  */
-export function validateProjectPath(projectPath: string): { valid: boolean; error?: string } {
+export function validateProjectPath(projectPath: string): { valid: boolean; created?: boolean; error?: string } {
   try {
     if (!fs.existsSync(projectPath)) {
-      return { valid: false, error: "Path does not exist" };
+      fs.mkdirSync(projectPath, { recursive: true });
+      return { valid: true, created: true };
     }
 
     const stats = fs.statSync(projectPath);
@@ -136,9 +120,7 @@ export function validateProjectPath(projectPath: string): { valid: boolean; erro
       return { valid: false, error: "Path is not a directory" };
     }
 
-    // Check if we can read the directory
     fs.readdirSync(projectPath);
-
     return { valid: true };
   } catch (err) {
     return {
@@ -149,12 +131,12 @@ export function validateProjectPath(projectPath: string): { valid: boolean; erro
 }
 
 /**
- * Get project info from path (name, size, file count)
+ * Get project info from path
  */
 export async function getProjectInfo(projectPath: string): Promise<{
   name: string;
   fileCount: number;
-  detectedStack: StackType | null;
+  detectedStack: string | null;
 }> {
   const name = path.basename(projectPath);
   const detectedStack = await detectStack(projectPath);

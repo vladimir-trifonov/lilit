@@ -7,10 +7,48 @@
 import fs from "fs";
 import path from "path";
 import yaml from "js-yaml";
+import { DEFAULT_CLAUDE_MODEL } from "./providers";
 
 const AGENTS_DIR = path.resolve(process.cwd(), "agents");
 
 // --- Types ---
+
+export interface PersonalityVoice {
+  style: string;
+  tone: string;
+  tempo: string;
+}
+
+export interface PersonalityQuirks {
+  catchphrases?: string[];
+  pet_peeves?: string[];
+  habits?: string[];
+}
+
+export interface PersonalityStandupVoice {
+  pitch?: string;
+  speed?: number;
+  accent_hint?: string;
+  sample_line?: string;
+}
+
+export interface ParsedPersonality {
+  codename: string;
+  voice: PersonalityVoice;
+  opinions?: {
+    strong?: string[];
+    dislikes?: string[];
+  };
+  quirks?: PersonalityQuirks;
+  strengths?: string[];
+  weaknesses?: string[];
+  standup_voice?: PersonalityStandupVoice;
+}
+
+export interface PersonalityOverlay {
+  tone_shift?: string;
+  additional_quirk?: string;
+}
 
 export interface RoleDefinition {
   role: string;
@@ -19,6 +57,7 @@ export interface RoleDefinition {
   provider?: string;
   model?: string;
   systemPrompt: string;
+  personalityOverlay?: PersonalityOverlay;
 }
 
 export interface AgentDefinition {
@@ -31,6 +70,7 @@ export interface AgentDefinition {
   tags: string[];
   systemPrompt: string;
   roles: Record<string, RoleDefinition>;
+  personality?: ParsedPersonality;
 }
 
 interface Frontmatter {
@@ -42,6 +82,8 @@ interface Frontmatter {
   model?: string;
   capabilities?: string[];
   tags?: string[];
+  personality?: ParsedPersonality;
+  personality_overlay?: PersonalityOverlay;
 }
 
 // --- Frontmatter Parser ---
@@ -76,6 +118,7 @@ function loadAgent(type: string): AgentDefinition | null {
     tags: meta.tags ?? [],
     systemPrompt: body,
     roles: {},
+    personality: meta.personality,
   };
 
   // Load roles
@@ -93,6 +136,7 @@ function loadAgent(type: string): AgentDefinition | null {
         provider: roleMeta.provider,
         model: roleMeta.model,
         systemPrompt: roleBody,
+        personalityOverlay: roleMeta.personality_overlay,
       };
     }
   }
@@ -155,11 +199,11 @@ export function getProviderConfig(
 ): { provider: string; model: string } {
   const agent = getAgent(agentType);
   if (!agent) {
-    return { provider: "claude-code", model: "sonnet" };
+    return { provider: "claude-code", model: DEFAULT_CLAUDE_MODEL };
   }
 
   const baseProvider = agent.provider ?? "claude-code";
-  const baseModel = agent.model ?? "sonnet";
+  const baseModel = agent.model ?? DEFAULT_CLAUDE_MODEL;
 
   if (role && agent.roles[role]) {
     const roleConfig = agent.roles[role];

@@ -4,6 +4,13 @@ import { useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 
+interface ProviderInfo {
+  id: string;
+  name: string;
+  available: boolean;
+  models: string[];
+}
+
 interface RoleDefinition {
   role: string;
   name: string;
@@ -42,13 +49,16 @@ export function AgentsPanel({ onClose }: AgentsPanelProps) {
   const [editProvider, setEditProvider] = useState("");
   const [dirty, setDirty] = useState(false);
 
+  // Providers from API
+  const [providers, setProviders] = useState<ProviderInfo[]>([]);
+
   // New agent form
   const [showNewAgent, setShowNewAgent] = useState(false);
   const [newType, setNewType] = useState("");
   const [newName, setNewName] = useState("");
 
   useEffect(() => {
-    fetchAgents();
+    Promise.all([fetchAgents(), fetchProviders()]).finally(() => setLoading(false));
   }, []);
 
   async function fetchAgents() {
@@ -58,9 +68,23 @@ export function AgentsPanel({ onClose }: AgentsPanelProps) {
       setAgents(data.agents || {});
     } catch (err) {
       console.error("Failed to fetch agents:", err);
-    } finally {
-      setLoading(false);
     }
+  }
+
+  async function fetchProviders() {
+    try {
+      const res = await fetch("/api/providers");
+      const data = await res.json();
+      setProviders((data.providers ?? []).filter((p: ProviderInfo) => p.available));
+    } catch (err) {
+      console.error("Failed to fetch providers:", err);
+    }
+  }
+
+  /** Get models for the currently selected provider */
+  function getModelsForProvider(providerId: string): string[] {
+    const p = providers.find((pr) => pr.id === providerId);
+    return p?.models ?? [];
   }
 
   function selectAgent(type: string, role?: string) {
@@ -148,8 +172,8 @@ export function AgentsPanel({ onClose }: AgentsPanelProps) {
           type: newType,
           name: newName,
           description: "",
-          provider: "claude-code",
-          model: "sonnet",
+          provider: providers[0]?.id ?? "claude-code",
+          model: providers[0]?.models[0] ?? "",
           capabilities: ["file-access", "shell-access", "tool-use"],
           tags: [],
           systemPrompt: `You are a ${newName}. Define your role here.`,
@@ -238,7 +262,7 @@ export function AgentsPanel({ onClose }: AgentsPanelProps) {
                       </Badge>
                     </div>
                     <div className="text-xs text-muted-foreground mt-0.5">
-                      {agent.provider ?? "claude-code"} / {agent.model ?? "sonnet"}
+                      {agent.provider ?? "claude-code"} / {agent.model ?? "default"}
                     </div>
                   </button>
 
@@ -344,22 +368,34 @@ export function AgentsPanel({ onClose }: AgentsPanelProps) {
                     <label className="text-xs text-muted-foreground block mb-1">Provider</label>
                     <select
                       value={editProvider}
-                      onChange={(e) => { setEditProvider(e.target.value); setDirty(true); }}
+                      onChange={(e) => {
+                        const newProvider = e.target.value;
+                        setEditProvider(newProvider);
+                        // Reset model when provider changes
+                        const models = getModelsForProvider(newProvider);
+                        setEditModel(models[0] ?? "");
+                        setDirty(true);
+                      }}
                       className="w-full bg-muted/30 border border-input rounded-md px-3 py-1.5 text-sm outline-none"
                     >
                       <option value="">Inherit from parent</option>
-                      <option value="claude-code">Claude Code CLI</option>
-                      <option value="gemini">Google Gemini</option>
+                      {providers.map((p) => (
+                        <option key={p.id} value={p.id}>{p.name}</option>
+                      ))}
                     </select>
                   </div>
                   <div>
                     <label className="text-xs text-muted-foreground block mb-1">Model</label>
-                    <input
+                    <select
                       value={editModel}
                       onChange={(e) => { setEditModel(e.target.value); setDirty(true); }}
-                      placeholder="Inherit from parent"
                       className="w-full bg-muted/30 border border-input rounded-md px-3 py-1.5 text-sm outline-none"
-                    />
+                    >
+                      <option value="">Inherit from parent</option>
+                      {(editProvider ? getModelsForProvider(editProvider) : providers.flatMap((p) => p.models)).map((m) => (
+                        <option key={m} value={m}>{m}</option>
+                      ))}
+                    </select>
                   </div>
                 </div>
 

@@ -23,13 +23,14 @@ interface Plan {
 }
 
 interface PlanConfirmationProps {
+  projectId: string;
   runId: string;
   plan: Plan;
   onConfirmed: () => void;
   onRejected: () => void;
 }
 
-export function PlanConfirmation({ runId, plan, onConfirmed, onRejected }: PlanConfirmationProps) {
+export function PlanConfirmation({ projectId, runId, plan, onConfirmed, onRejected }: PlanConfirmationProps) {
   const [submitting, setSubmitting] = useState(false);
   const [notes, setNotes] = useState("");
   const [showNotes, setShowNotes] = useState(false);
@@ -40,7 +41,7 @@ export function PlanConfirmation({ runId, plan, onConfirmed, onRejected }: PlanC
       await fetch("/api/plan", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ runId, action, notes: notes || undefined }),
+        body: JSON.stringify({ projectId, runId, action, notes: notes || undefined }),
       });
 
       if (action === "confirm") {

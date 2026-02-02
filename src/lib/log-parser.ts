@@ -2,7 +2,7 @@
  * Parse live log content to extract pipeline steps and their status
  */
 
-import type { PipelineStep, StepStatus } from "@/types/pipeline";
+import type { PipelineStep } from "@/types/pipeline";
 
 /**
  * Parse log content to extract pipeline steps

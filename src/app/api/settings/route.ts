@@ -32,7 +32,7 @@ export async function GET(req: Request) {
 
     // Merge stack from project if not in settings
     if (project.stack && !settings.stack) {
-      settings.stack = project.stack as ProjectSettings["stack"];
+      settings.stack = project.stack ?? undefined;
     }
 
     return NextResponse.json(settings);

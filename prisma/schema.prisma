@@ -16,10 +16,12 @@ model Project {
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
-  conversations Conversation[]
-  tasks         Task[]
-  agentRuns     AgentRun[]
-  eventLogs     EventLog[]
+  conversations      Conversation[]
+  agentRuns          AgentRun[]
+  eventLogs          EventLog[]
+  pipelineRuns       PipelineRun[]
+  memories           Memory[]
+  agentRelationships AgentRelationship[]
 
   @@index([createdAt])
 }
@@ -48,46 +50,26 @@ model Message {
   @@index([conversationId, createdAt])
 }
 
-model Task {
-  id          String    @id @default(cuid())
-  projectId   String
-  project     Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  title       String
-  description String?
-  status      String    @default("pending") // "pending" | "in_progress" | "review" | "done" | "failed"
-  assignedTo  String?   // "pm" | "developer" | "qa" | "designer"
-  parentId    String?   // for subtask hierarchy
-  order       Int       @default(0)
-  result      String?   // outcome/summary from agent
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
-
-  agentRuns AgentRun[]
-
-  @@index([projectId, status])
-  @@index([parentId])
-}
-
 model AgentRun {
-  id        String   @id @default(cuid())
-  projectId String
-  project   Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  taskId    String?
-  task      Task?    @relation(fields: [taskId], references: [id], onDelete: SetNull)
-  agent     String   // "architect" | "pm" | "developer" | "qa"
-  role      String?  // sub-role: "code" | "review" | "fix" | "devops" | "automation" | "manual"
-  model     String
-  input     String
-  output    String?
-  status    String   @default("running") // "running" | "completed" | "failed"
-  durationMs Int?
-  tokensUsed Int?
-  costUsd    Float?
-  createdAt  DateTime @default(now())
+  id            String       @id @default(cuid())
+  projectId     String
+  project       Project      @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  pipelineRunId String?
+  pipelineRun   PipelineRun? @relation(fields: [pipelineRunId], references: [id], onDelete: SetNull)
+  agent         String       // "architect" | "pm" | "developer" | "qa"
+  role          String?      // sub-role: "code" | "review" | "fix" | "devops" | "automation" | "manual"
+  model         String
+  input         String
+  output        String?
+  status        String       @default("running") // "running" | "completed" | "failed"
+  durationMs    Int?
+  tokensUsed    Int?
+  costUsd       Float?
+  createdAt     DateTime     @default(now())
 
   @@index([projectId, createdAt])
-  @@index([taskId])
   @@index([agent, status])
+  @@index([pipelineRunId])
 }
 
 model EventLog {
@@ -104,4 +86,69 @@ model EventLog {
   @@index([projectId, createdAt])
   @@index([taskId])
   @@index([type])
+}
+
+model PipelineRun {
+  id             String   @id @default(cuid())
+  projectId      String
+  project        Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  conversationId String
+  runId          String   @unique
+  userMessage    String
+  status         String   @default("running") // running | awaiting_plan | completed | failed | aborted
+
+  plan           String?  // JSON: PMPlan
+  pipeline       String?  // JSON: string[] of pipeline steps
+  currentStep    Int      @default(0)
+  completedSteps String?  // JSON: StepResult[]
+  lastOutput     String?
+  fixCycle       Int      @default(0)
+  runningCost    Float    @default(0)
+  error          String?
+
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  agentRuns      AgentRun[]
+
+  @@index([projectId, status])
+  @@index([runId])
+}
+
+model Memory {
+  id           String   @id @default(cuid())
+  projectId    String
+  project      Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  agent        String?
+  role         String?
+  type         String   // "code_pattern" | "decision" | "personality"
+  title        String
+  content      String
+  // embedding vector(768) — managed via raw SQL, not in Prisma model
+  sourceType   String   // "event_log" | "agent_run" | "manual" | "file_index"
+  sourceId     String?
+  significance Float    @default(0.5)
+  metadata     String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@index([projectId, type])
+  @@index([projectId, agent])
+  @@index([sourceType, sourceId])
+}
+
+model AgentRelationship {
+  id        String   @id @default(cuid())
+  projectId String
+  project   Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  fromAgent String
+  toAgent   String
+  trust     Float    @default(0.5)
+  tension   Float    @default(0.0)
+  rapport   Float    @default(0.5)
+  lastNote  String?
+  updatedAt DateTime @updatedAt
+
+  @@unique([projectId, fromAgent, toAgent])
+  @@index([projectId])
 }

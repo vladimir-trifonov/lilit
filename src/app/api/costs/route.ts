@@ -23,33 +23,27 @@ export async function GET(req: Request) {
 
   try {
     if (conversationId) {
-      // Get costs for a specific conversation
-      const conversation = await prisma.conversation.findUnique({
-        where: { id: conversationId },
-        include: {
-          messages: {
-            orderBy: { createdAt: "asc" },
-            take: 1,
-          },
-        },
+      // Get costs for a specific conversation via pipeline run FK
+      const pipelineRuns = await prisma.pipelineRun.findMany({
+        where: { conversationId },
+        select: { id: true },
       });
 
-      if (!conversation) {
-        return NextResponse.json({ error: "Conversation not found" }, { status: 404 });
+      if (pipelineRuns.length === 0) {
+        return NextResponse.json({
+          conversationId,
+          totalCost: 0,
+          totalTokens: 0,
+          runCount: 0,
+          byAgent: {},
+          runs: [],
+        });
       }
 
-      const startTime = conversation.messages[0]?.createdAt ?? conversation.createdAt;
-      const endTime = conversation.updatedAt;
+      const pipelineRunIds = pipelineRuns.map((r) => r.id);
 
-      // Get all agent runs in this time window for this project
       const runs = await prisma.agentRun.findMany({
-        where: {
-          projectId: conversation.projectId,
-          createdAt: {
-            gte: startTime,
-            lte: endTime,
-          },
-        },
+        where: { pipelineRunId: { in: pipelineRunIds } },
         orderBy: { createdAt: "asc" },
       });
 
@@ -72,7 +66,6 @@ export async function GET(req: Request) {
 
       return NextResponse.json({
         conversationId,
-        projectId: conversation.projectId,
         totalCost,
         totalTokens,
         runCount: runs.length,

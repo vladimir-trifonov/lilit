@@ -9,7 +9,7 @@ export async function GET() {
   const projects = await prisma.project.findMany({
     orderBy: { updatedAt: "desc" },
     include: {
-      _count: { select: { conversations: true, tasks: true } },
+      _count: { select: { conversations: true } },
     },
   });
   return NextResponse.json(projects);

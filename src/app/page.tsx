@@ -1,12 +1,11 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { Chat } from "@/components/chat";
 import { ProjectSelector } from "@/components/project-selector";
-import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from "@/components/ui/resizable";
+import { ProviderAlert } from "@/components/provider-alert";
 import { Button } from "@/components/ui/button";
 import { ChevronsLeft, ChevronsRight } from "lucide-react";
-import { PanelImperativeHandle } from "react-resizable-panels";
 
 interface Project {
   id: string;
@@ -15,97 +14,132 @@ interface Project {
   description: string | null;
 }
 
+const ACTIVE_PROJECT_KEY = "lilit-active-project";
+
 export default function Home() {
   const [projects, setProjects] = useState<Project[]>([]);
   const [activeProject, setActiveProject] = useState<Project | null>(null);
   const [isCollapsed, setIsCollapsed] = useState(false);
-  const sidebarRef = useRef<PanelImperativeHandle>(null);
+  const [runningProjectIds, setRunningProjectIds] = useState<Set<string>>(new Set());
 
+  // Load projects and restore active project from localStorage
   useEffect(() => {
     fetch("/api/projects")
       .then((r) => r.json())
-      .then(setProjects);
+      .then((loaded: Project[]) => {
+        setProjects(loaded);
+
+        // Restore active project from localStorage
+        const savedId = localStorage.getItem(ACTIVE_PROJECT_KEY);
+        if (savedId) {
+          const match = loaded.find((p) => p.id === savedId);
+          if (match) setActiveProject(match);
+        }
+      });
   }, []);
 
-  const toggleSidebar = () => {
-    const sidebar = sidebarRef.current;
-    if (sidebar) {
-      if (isCollapsed) {
-        sidebar.expand();
-      } else {
-        sidebar.collapse();
+  // Persist active project selection
+  const handleSelectProject = useCallback((p: Project) => {
+    setActiveProject(p);
+    localStorage.setItem(ACTIVE_PROJECT_KEY, p.id);
+  }, []);
+
+  // Poll for running projects every 5 seconds
+  useEffect(() => {
+    let active = true;
+
+    async function poll() {
+      try {
+        const res = await fetch("/api/pipeline/active");
+        const data = await res.json();
+        if (active && data.projectIds) {
+          setRunningProjectIds(new Set(data.projectIds));
+        }
+      } catch {
+        // ignore
       }
     }
-  };
+
+    poll();
+    const interval = setInterval(poll, 5000);
+
+    return () => {
+      active = false;
+      clearInterval(interval);
+    };
+  }, []);
 
   return (
-    <div className="h-screen bg-background text-foreground font-sans overflow-hidden">
-      <ResizablePanelGroup orientation="horizontal">
-        <ResizablePanel
-          panelRef={sidebarRef}
-          defaultSize={18}
-          minSize={12}
-          maxSize={30}
-          collapsible={true}
-          collapsedSize={4}
-          onResize={(size) => {
-            const collapsed = size.asPercentage <= 10;
-            if (collapsed !== isCollapsed) {
-              setIsCollapsed(collapsed);
-            }
-          }}
-          className="border-r border-sidebar-border bg-sidebar flex flex-col z-20"
-        >
-          <div className={`border-b border-sidebar-border shrink-0 flex items-center h-14 ${isCollapsed ? "justify-center p-0" : "px-4 justify-between"}`}>
-            {isCollapsed ? (
-              <Button variant="ghost" size="icon" onClick={toggleSidebar} className="h-8 w-8">
+    <div className="flex h-screen bg-background text-foreground font-sans overflow-hidden">
+      {/* Sidebar */}
+      <div
+        className={`flex-shrink-0 bg-sidebar border-r border-sidebar-border flex flex-col transition-all duration-300 ease-in-out ${
+          isCollapsed ? "w-[50px]" : "w-[220px]"
+        }`}
+      >
+        <div className={`shrink-0 flex items-center h-14 border-b border-sidebar-border ${isCollapsed ? "justify-center" : "px-4 justify-between"}`}>
+           {isCollapsed ? (
+              <Button variant="ghost" size="icon" onClick={() => setIsCollapsed(false)} className="h-8 w-8 hover:bg-sidebar-accent/50 text-muted-foreground hover:text-foreground">
                 <ChevronsRight className="h-4 w-4" />
               </Button>
             ) : (
               <>
-                <div>
-                  <h1 className="text-lg font-semibold tracking-tight text-sidebar-foreground">Lilit</h1>
-                  <p className="text-xs text-muted-foreground">AI Development Team</p>
+                <div className="overflow-hidden">
+                  <h1 className="text-lg font-semibold tracking-tight text-sidebar-foreground truncate">Lilit</h1>
+                  <p className="text-xs text-muted-foreground truncate">AI Development Team</p>
                 </div>
-                <Button variant="ghost" size="icon" onClick={toggleSidebar} className="h-8 w-8 text-muted-foreground hover:text-foreground">
+                <Button variant="ghost" size="icon" onClick={() => setIsCollapsed(true)} className="h-8 w-8 text-muted-foreground hover:text-foreground hover:bg-sidebar-accent/50">
                   <ChevronsLeft className="h-4 w-4" />
                 </Button>
               </>
             )}
-          </div>
-          <ProjectSelector
-            projects={projects}
-            activeProject={activeProject}
-            onSelect={setActiveProject}
-            onProjectCreated={(p) => {
-              setProjects((prev) => [p, ...prev]);
-              setActiveProject(p);
-            }}
-            isCollapsed={isCollapsed}
-          />
-        </ResizablePanel>
+        </div>
 
-        <ResizableHandle withHandle />
+        <ProjectSelector
+          projects={projects}
+          activeProject={activeProject}
+          onSelect={handleSelectProject}
+          onProjectCreated={(p) => {
+            setProjects((prev) => [p, ...prev]);
+            handleSelectProject(p);
+          }}
+          isCollapsed={isCollapsed}
+          runningProjectIds={runningProjectIds}
+        />
+      </div>
 
-        <ResizablePanel defaultSize={82} minSize={30}>
-          {/* Main - Soft Gradient Section */}
-          <div className="flex flex-col min-w-0 section-soft h-full overflow-hidden">
-            <div className="flex-1 flex flex-col container-wrapper h-full py-6 min-h-0">
-              {activeProject ? (
-                <Chat project={activeProject} />
-              ) : (
-                <div className="flex-1 flex items-center justify-center text-muted-foreground animate-fade-in-up">
-                  <div className="text-center">
-                    <p className="text-3xl mb-4">👋</p>
-                    <h2 className="text-xl font-medium text-foreground mb-2">Welcome to Lilit</h2>
-                    <p className="text-sm opacity-80">Select or create a project to start building.</p>
-                  </div>
-                </div>
-              )}
-            </div>
-          </div>
-        </ResizablePanel>
-      </ResizablePanelGroup>
+      {/* Main Content */}
+      <div className="flex-1 flex flex-col min-w-0 bg-background">
+        <ProviderAlert />
+        <div className="flex flex-col min-w-0 section-soft h-full overflow-hidden">
+             {/* Header */}
+             <header className="h-14 border-b flex items-center px-6 justify-between bg-surface shrink-0 z-20 relative">
+               <div className="flex items-center gap-3">
+                 <h2 className="font-semibold text-foreground">
+                   {activeProject ? activeProject.name : "Select a Project"}
+                 </h2>
+                 {activeProject?.path && (
+                   <span className="text-xs text-muted-foreground font-mono bg-muted/50 px-2 py-0.5 rounded">
+                     {activeProject.path}
+                   </span>
+                 )}
+               </div>
+               <div className="flex items-center gap-2">
+               </div>
+             </header>
+
+             {/* Chat Interface */}
+             <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
+               {activeProject ? (
+                 <Chat key={activeProject.id} project={activeProject} />
+               ) : (
+                 <div className="flex h-full items-center justify-center text-muted-foreground">
+                   Select a project to start
+                 </div>
+               )}
+             </div>
+        </div>
+      </div>
     </div>
   );
 }

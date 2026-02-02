@@ -1,11 +1,13 @@
 /**
  * Project settings types
- * Settings are stored as JSON in the database and can be configured per-project
+ * Settings are stored as JSON in the database and can be configured per-project.
+ *
+ * Agent models are NOT hardcoded here. On first pipeline run, available providers
+ * are detected, the first model is picked, and the choice is saved to DB per project.
+ * On restart, if the saved model is no longer available, a new one is auto-picked.
  */
 
 export type ModelType = string;
-
-export type StackType = "nextjs" | "react" | "python" | "nodejs" | "vue" | "svelte" | "django" | "fastapi";
 
 export interface AgentSettings {
   enabled: boolean;
@@ -15,84 +17,29 @@ export interface AgentSettings {
 }
 
 export interface ProjectSettings {
-  stack?: StackType;
+  stack?: string;
   budgetLimit?: number; // Max cost in USD per pipeline run
+  personalityEnabled?: boolean; // Enable agent personalities + RAG memory (default: true)
   agents: Record<string, AgentSettings>;
 }
 
-// Default settings (can be overridden by env vars)
 export const DEFAULT_SETTINGS: ProjectSettings = {
-  stack: undefined,
   budgetLimit: parseFloat(process.env.DEFAULT_BUDGET_LIMIT || "10.0"),
-  agents: {
-    pm: {
-      enabled: true,
-      model: process.env.PM_MODEL || "gemini-3-pro-preview",
-    },
-    architect: {
-      enabled: true,
-      model: process.env.ARCHITECT_MODEL || "gemini-3-pro-preview",
-    },
-    developer: {
-      enabled: true,
-      model: process.env.DEVELOPER_MODEL || "sonnet",
-      roles: {
-        code: { enabled: true, model: process.env.DEVELOPER_CODE_MODEL || "sonnet" },
-        review: { enabled: true, model: process.env.DEVELOPER_REVIEW_MODEL || "sonnet" },
-        fix: { enabled: true, model: process.env.DEVELOPER_FIX_MODEL || "sonnet" },
-        devops: { enabled: true, model: process.env.DEVELOPER_DEVOPS_MODEL || "sonnet" },
-      },
-    },
-    qa: {
-      enabled: true,
-      model: process.env.QA_MODEL || "sonnet",
-      roles: {
-        automation: { enabled: true, model: process.env.QA_AUTOMATION_MODEL || "sonnet" },
-        manual: { enabled: true, model: process.env.QA_MANUAL_MODEL || "sonnet" },
-      },
-    },
-  },
+  agents: {},
 };
 
 /**
- * Merge user settings with defaults — dynamic, iterates all agents in default settings.
+ * Merge user settings with defaults.
+ * Agent configs come from DB (auto-detected or user-set), not from DEFAULT_SETTINGS.
  */
 export function mergeSettings(userSettings: Partial<ProjectSettings> | null): ProjectSettings {
   if (!userSettings) return DEFAULT_SETTINGS;
 
-  const mergedAgents: Record<string, AgentSettings> = {};
-
-  // Start with all default agents
-  for (const [key, defaultAgent] of Object.entries(DEFAULT_SETTINGS.agents)) {
-    const userAgent = userSettings.agents?.[key];
-    if (!userAgent) {
-      mergedAgents[key] = defaultAgent;
-      continue;
-    }
-
-    mergedAgents[key] = {
-      ...defaultAgent,
-      ...userAgent,
-      roles: {
-        ...defaultAgent.roles,
-        ...userAgent.roles,
-      },
-    };
-  }
-
-  // Include any user agents not in defaults
-  if (userSettings.agents) {
-    for (const [key, userAgent] of Object.entries(userSettings.agents)) {
-      if (!mergedAgents[key]) {
-        mergedAgents[key] = userAgent;
-      }
-    }
-  }
-
   return {
     stack: userSettings.stack ?? DEFAULT_SETTINGS.stack,
     budgetLimit: userSettings.budgetLimit ?? DEFAULT_SETTINGS.budgetLimit,
-    agents: mergedAgents,
+    personalityEnabled: userSettings.personalityEnabled ?? true,
+    agents: userSettings.agents ?? {},
   };
 }
 

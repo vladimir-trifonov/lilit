@@ -1,6 +1,6 @@
 /**
  * New project creation form
- * Auto-detects stack from project path and validates accessibility
+ * Browse for a folder via native OS picker, auto-detects stack
  */
 
 "use client";
@@ -8,38 +8,28 @@
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import type { StackType } from "@/types/settings";
 
 interface NewProjectFormProps {
   onSuccess: (project: { id: string; name: string; path: string }) => void;
   onCancel: () => void;
 }
 
-const STACK_OPTIONS: { value: StackType; label: string }[] = [
-  { value: "nextjs", label: "Next.js" },
-  { value: "react", label: "React" },
-  { value: "vue", label: "Vue" },
-  { value: "svelte", label: "Svelte" },
-  { value: "nodejs", label: "Node.js" },
-  { value: "python", label: "Python" },
-  { value: "django", label: "Django" },
-  { value: "fastapi", label: "FastAPI" },
-];
-
 export function NewProjectForm({ onSuccess, onCancel }: NewProjectFormProps) {
   const [name, setName] = useState("");
   const [path, setPath] = useState("");
   const [description, setDescription] = useState("");
-  const [stack, setStack] = useState<StackType | "">("");
   const [detecting, setDetecting] = useState(false);
-  const [detectedStack, setDetectedStack] = useState<StackType | null>(null);
+  const [browsing, setBrowsing] = useState(false);
+  const [detectedStack, setDetectedStack] = useState<string | null>(null);
+  const [pathCreated, setPathCreated] = useState(false);
   const [pathError, setPathError] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const handlePathChange = (newPath: string) => {
+  const setPathAndName = (newPath: string) => {
     setPath(newPath);
     setPathError(null);
+    setPathCreated(false);
     setDetectedStack(null);
 
     // Auto-populate name from path
@@ -49,18 +39,18 @@ export function NewProjectForm({ onSuccess, onCancel }: NewProjectFormProps) {
     }
   };
 
-  const handleDetectStack = async () => {
-    if (!path) return;
+  const validateAndDetect = async (targetPath: string) => {
+    if (!targetPath) return;
 
     setDetecting(true);
     setPathError(null);
+    setPathCreated(false);
 
     try {
-      // Validate path first
       const validateRes = await fetch("/api/projects/validate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ path }),
+        body: JSON.stringify({ path: targetPath }),
       });
 
       const validateData = await validateRes.json();
@@ -71,25 +61,43 @@ export function NewProjectForm({ onSuccess, onCancel }: NewProjectFormProps) {
         return;
       }
 
+      if (validateData.created) {
+        setPathCreated(true);
+      }
+
       // Auto-detect stack
       const detectRes = await fetch("/api/projects/detect-stack", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ path }),
+        body: JSON.stringify({ path: targetPath }),
       });
 
       const detectData = await detectRes.json();
 
       if (detectData.stack) {
         setDetectedStack(detectData.stack);
-        if (!stack) {
-          setStack(detectData.stack);
-        }
       }
-    } catch (err) {
-      setPathError("Failed to validate or detect stack");
+    } catch {
+      setPathError("Failed to validate path");
     } finally {
       setDetecting(false);
+    }
+  };
+
+  const handleBrowse = async () => {
+    setBrowsing(true);
+    try {
+      const res = await fetch("/api/browse");
+      const data = await res.json();
+
+      if (data.path) {
+        setPathAndName(data.path);
+        await validateAndDetect(data.path);
+      }
+    } catch {
+      // Dialog cancelled or failed — ignore
+    } finally {
+      setBrowsing(false);
     }
   };
 
@@ -106,7 +114,7 @@ export function NewProjectForm({ onSuccess, onCancel }: NewProjectFormProps) {
           name: name.trim(),
           path: path.trim(),
           description: description.trim() || undefined,
-          stack: stack || undefined,
+          stack: detectedStack || undefined,
         }),
       });
 
@@ -146,33 +154,38 @@ export function NewProjectForm({ onSuccess, onCancel }: NewProjectFormProps) {
               <input
                 type="text"
                 value={path}
-                onChange={(e) => handlePathChange(e.target.value)}
-                onBlur={handleDetectStack}
+                onChange={(e) => setPathAndName(e.target.value)}
+                onBlur={() => validateAndDetect(path)}
                 placeholder="/path/to/your/project"
                 className="flex-1 bg-zinc-800 border border-zinc-700 rounded px-3 py-2 text-sm"
                 required
               />
               <Button
                 type="button"
-                onClick={handleDetectStack}
-                disabled={!path || detecting}
+                onClick={handleBrowse}
+                disabled={browsing || detecting}
                 variant="outline"
                 size="sm"
               >
-                {detecting ? "Detecting..." : "Detect"}
+                {browsing ? "Opening..." : "Browse"}
               </Button>
             </div>
             {pathError && (
-              <p className="text-xs text-red-400 mt-1">❌ {pathError}</p>
+              <p className="text-xs text-red-400 mt-1">{pathError}</p>
+            )}
+            {pathCreated && !pathError && (
+              <p className="text-xs text-blue-400 mt-1">
+                Directory created
+              </p>
             )}
             {detectedStack && !pathError && (
               <p className="text-xs text-green-400 mt-1">
-                ✅ Detected: <Badge variant="secondary" className="text-xs ml-1">{detectedStack}</Badge>
+                Detected: <Badge variant="secondary" className="text-xs ml-1">{detectedStack}</Badge>
               </p>
             )}
-            <p className="text-xs text-zinc-500 mt-1">
-              Absolute path to your project directory
-            </p>
+            {detecting && (
+              <p className="text-xs text-zinc-400 mt-1">Detecting stack...</p>
+            )}
           </div>
 
           {/* Project Name */}
@@ -188,28 +201,6 @@ export function NewProjectForm({ onSuccess, onCancel }: NewProjectFormProps) {
               className="w-full bg-zinc-800 border border-zinc-700 rounded px-3 py-2 text-sm"
               required
             />
-          </div>
-
-          {/* Stack Selection */}
-          <div>
-            <label className="text-sm font-medium text-zinc-300 block mb-2">
-              Tech Stack
-            </label>
-            <select
-              value={stack}
-              onChange={(e) => setStack(e.target.value as StackType | "")}
-              className="w-full bg-zinc-800 border border-zinc-700 rounded px-3 py-2 text-sm"
-            >
-              <option value="">Auto-detect</option>
-              {STACK_OPTIONS.map((opt) => (
-                <option key={opt.value} value={opt.value}>
-                  {opt.label}
-                </option>
-              ))}
-            </select>
-            <p className="text-xs text-zinc-500 mt-1">
-              Leave as "Auto-detect" to automatically determine from project files
-            </p>
           </div>
 
           {/* Description */}
@@ -229,7 +220,7 @@ export function NewProjectForm({ onSuccess, onCancel }: NewProjectFormProps) {
           {/* Error */}
           {error && (
             <div className="bg-red-950 border border-red-800 rounded-lg p-3 text-sm text-red-200">
-              ❌ {error}
+              {error}
             </div>
           )}
 

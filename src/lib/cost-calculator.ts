@@ -13,16 +13,6 @@ interface TokenUsage {
   outputTokens: number;
 }
 
-// Dynamic pricing registry (populated at runtime)
-const customPricing: Record<string, ModelPricing> = {};
-
-/**
- * Register pricing for a model at runtime (e.g. from provider scanning)
- */
-export function registerModelPricing(model: string, pricing: ModelPricing) {
-  customPricing[model.toLowerCase()] = pricing;
-}
-
 // Default pricing (as of Feb 2026) - can be overridden via env vars
 const DEFAULT_PRICING: Record<string, ModelPricing> = {
   // Claude models (via API - subscription is free via CLI)
@@ -92,11 +82,6 @@ function getModelPricing(model: string): ModelPricing {
     };
   }
 
-  // Check runtime-registered pricing
-  if (customPricing[modelKey]) {
-    return customPricing[modelKey];
-  }
-
   // Return default pricing or zero if unknown
   return (
     DEFAULT_PRICING[modelKey] || {
@@ -127,47 +112,3 @@ export function formatCost(costUsd: number): string {
   return `$${costUsd.toFixed(2)}`;
 }
 
-/**
- * Parse token usage from Claude Code CLI output
- * Looks for patterns like "8192in/1024out tokens"
- */
-export function parseClaudeTokenUsage(output: string): TokenUsage | null {
-  const match = output.match(/(\d+)in\/(\d+)out/);
-  if (!match) return null;
-
-  return {
-    inputTokens: parseInt(match[1]),
-    outputTokens: parseInt(match[2]),
-  };
-}
-
-/**
- * Parse token usage from Gemini response (ai-sdk format)
- */
-export function parseGeminiTokenUsage(usage: unknown): TokenUsage | null {
-  const u = usage as Record<string, number> | undefined;
-  if (!u) return null;
-
-  return {
-    inputTokens: u.promptTokens ?? u.inputTokens ?? 0,
-    outputTokens: u.completionTokens ?? u.outputTokens ?? 0,
-  };
-}
-
-/**
- * Get model display name
- */
-export function getModelDisplayName(model: string): string {
-  const names: Record<string, string> = {
-    sonnet: "Claude Sonnet 4.5",
-    opus: "Claude Opus 4.5",
-    haiku: "Claude Haiku 4",
-    "claude-sonnet-4-5": "Claude Sonnet 4.5",
-    "claude-opus-4-5": "Claude Opus 4.5",
-    "gemini-2.5-flash": "Gemini 2.5 Flash",
-    "gemini-3-pro-preview": "Gemini 3 Pro",
-    "gemini-3-pro-high": "Gemini 3 Pro High",
-    "gemini-3-pro-low": "Gemini 3 Pro Low",
-  };
-  return names[model.toLowerCase()] || model;
-}

@@ -1,3 +1,10 @@
+---
+name: insecure-defaults
+description: Detects insecure default configurations — hardcoded secrets, default credentials, permissive CORS, debug modes left enabled
+tags: [security, review]
+agents: [developer]
+---
+
 # Insecure Defaults Detection
 
 Security skill for detecting insecure default configurations that create vulnerabilities when applications run with missing or incomplete configuration.

@@ -2,46 +2,49 @@ import { execSync } from "child_process";
 import fs from "fs";
 import os from "os";
 import path from "path";
+import { DEFAULT_CLAUDE_MODEL } from "./providers";
+import { classifyError, type ErrorKind } from "./errors";
 
 export interface ClaudeCodeResult {
   success: boolean;
   output: string;
   error?: string;
+  errorKind?: ErrorKind;
   durationMs: number;
   tokensUsed?: { inputTokens: number; outputTokens: number };
 }
 
-// Shared log file for live UI polling
-const LOG_FILE = path.join(os.tmpdir(), "lilit-live.log");
-const ABORT_FILE = path.join(os.tmpdir(), "lilit-abort.flag");
-const PID_FILE = path.join(os.tmpdir(), "lilit-worker.pid");
-
-export function getLogFile() { return LOG_FILE; }
-export function getAbortFile() { return ABORT_FILE; }
-export function getPidFile() { return PID_FILE; }
-
-export function clearLog() {
-  try { fs.writeFileSync(LOG_FILE, "", "utf-8"); } catch {}
+// Per-project directory for isolation
+function getProjectDir(projectId: string): string {
+  const dir = path.join(os.tmpdir(), "lilit", projectId);
+  fs.mkdirSync(dir, { recursive: true });
+  return dir;
 }
 
-function appendLog(text: string) {
-  try { fs.appendFileSync(LOG_FILE, text); } catch {}
+export function getLogFile(projectId: string) { return path.join(getProjectDir(projectId), "live.log"); }
+export function getAbortFile(projectId: string) { return path.join(getProjectDir(projectId), "abort.flag"); }
+export function getPidFile(projectId: string) { return path.join(getProjectDir(projectId), "worker.pid"); }
+
+export function clearLog(projectId: string) {
+  try { fs.writeFileSync(getLogFile(projectId), "", "utf-8"); } catch {}
+}
+
+export function appendLog(projectId: string, text: string) {
+  try { fs.appendFileSync(getLogFile(projectId), text); } catch {}
 }
 
 // File-based abort system (works across processes)
-export function abortActiveProcess() {
+export function abortActiveProcess(projectId: string) {
   try {
-    fs.writeFileSync(ABORT_FILE, Date.now().toString(), "utf-8");
+    fs.writeFileSync(getAbortFile(projectId), Date.now().toString(), "utf-8");
 
     // Try to kill the worker process
     try {
-      const pid = fs.readFileSync(PID_FILE, "utf-8").trim();
+      const pid = fs.readFileSync(getPidFile(projectId), "utf-8").trim();
       if (pid) {
-        const { execSync } = require("child_process");
-        // Kill the worker process tree
+        // Kill the worker process tree — use pkill -P to only kill children of this worker
         execSync(`kill -TERM ${pid} 2>/dev/null || kill -9 ${pid} 2>/dev/null || true`);
-        // Also kill any Claude processes
-        execSync("pkill -f 'claude -p' 2>/dev/null || true");
+        execSync(`pkill -P ${pid} 2>/dev/null || true`);
       }
     } catch {}
 
@@ -51,28 +54,30 @@ export function abortActiveProcess() {
   }
 }
 
-export function isAborted(): boolean {
+export function isAborted(projectId: string): boolean {
   try {
-    return fs.existsSync(ABORT_FILE);
+    return fs.existsSync(getAbortFile(projectId));
   } catch {
     return false;
   }
 }
 
-export function resetAbort() {
+export function resetAbort(projectId: string) {
   try {
-    if (fs.existsSync(ABORT_FILE)) {
-      fs.unlinkSync(ABORT_FILE);
+    const abortFile = getAbortFile(projectId);
+    if (fs.existsSync(abortFile)) {
+      fs.unlinkSync(abortFile);
     }
-    if (fs.existsSync(PID_FILE)) {
-      fs.unlinkSync(PID_FILE);
+    const pidFile = getPidFile(projectId);
+    if (fs.existsSync(pidFile)) {
+      fs.unlinkSync(pidFile);
     }
   } catch {}
 }
 
-export function setWorkerPid(pid: number) {
+export function setWorkerPid(projectId: string, pid: number) {
   try {
-    fs.writeFileSync(PID_FILE, pid.toString(), "utf-8");
+    fs.writeFileSync(getPidFile(projectId), pid.toString(), "utf-8");
   } catch {}
 }
 
@@ -83,6 +88,7 @@ export function setWorkerPid(pid: number) {
 export async function runClaudeCode(opts: {
   prompt: string;
   cwd: string;
+  projectId: string;
   model?: string;
   systemPrompt?: string;
   timeoutMs?: number;
@@ -91,14 +97,15 @@ export async function runClaudeCode(opts: {
   const {
     prompt,
     cwd,
-    model = "sonnet",
+    projectId,
+    model = DEFAULT_CLAUDE_MODEL,
     systemPrompt,
     timeoutMs = 1_800_000,
     agentLabel = "agent",
   } = opts;
 
-  if (isAborted()) {
-    appendLog(`\n🛑 [${agentLabel}] Skipped — pipeline aborted\n`);
+  if (isAborted(projectId)) {
+    appendLog(projectId, `\n🛑 [${agentLabel}] Skipped — pipeline aborted\n`);
     return { success: false, output: "", error: "Aborted by user", durationMs: 0, tokensUsed: undefined };
   }
 
@@ -106,10 +113,15 @@ export async function runClaudeCode(opts: {
   const tmpDir = os.tmpdir();
   const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   const promptFile = path.join(tmpDir, `lilit-prompt-${id}.txt`);
-  const sysFile = path.join(tmpDir, `lilit-sys-${id}.txt`);
 
   fs.writeFileSync(promptFile, prompt, "utf-8");
-  appendLog(`\n${"=".repeat(60)}\n🚀 [${agentLabel}] Started — ${new Date().toLocaleTimeString()}\n${"=".repeat(60)}\n`);
+  appendLog(projectId, `\n${"=".repeat(60)}\n🚀 [${agentLabel}] Started — ${new Date().toLocaleTimeString()}\n${"=".repeat(60)}\n`);
+
+  // Validate model name — alphanumeric, dots, dashes, colons, slashes only
+  const SAFE_MODEL_RE = /^[a-zA-Z0-9._:/-]+$/;
+  if (!SAFE_MODEL_RE.test(model)) {
+    throw new Error(`Invalid model name: ${model}`);
+  }
 
   try {
     // Build command — use $ENV_VAR instead of $(cat file) to avoid
@@ -119,7 +131,7 @@ export async function runClaudeCode(opts: {
       fs.writeFileSync(emptyMcp, '{"mcpServers":{}}', "utf-8");
     }
 
-    let cmd = `claude -p "$LILIT_PROMPT" --model ${model} --output-format text --permission-mode bypassPermissions --mcp-config '${emptyMcp}' --strict-mcp-config`;
+    let cmd = `claude -p "$LILIT_PROMPT" --model "${model}" --output-format text --permission-mode bypassPermissions --mcp-config '${emptyMcp}' --strict-mcp-config`;
 
     const execEnv = {
       ...process.env,
@@ -141,7 +153,7 @@ export async function runClaudeCode(opts: {
     });
 
     const duration = ((Date.now() - startTime) / 1000).toFixed(1);
-    appendLog(`\n${output}\n`);
+    appendLog(projectId, `\n${output}\n`);
 
     // Parse token usage from output (Claude Code CLI reports this)
     const tokenMatch = output.match(/(\d+)in\/(\d+)out/);
@@ -152,7 +164,7 @@ export async function runClaudeCode(opts: {
         }
       : undefined;
 
-    appendLog(`\n✅ [${agentLabel}] Done (${duration}s)\n`);
+    appendLog(projectId, `\n✅ [${agentLabel}] Done (${duration}s)\n`);
 
     return {
       success: true,
@@ -166,19 +178,20 @@ export async function runClaudeCode(opts: {
     const stderr = e.stderr?.toString?.()?.trim() || "";
     const duration = ((Date.now() - startTime) / 1000).toFixed(1);
 
-    if (stdout) appendLog(`\n${stdout}\n`);
-    if (stderr) appendLog(`\n⚠️ STDERR: ${stderr}\n`);
-    appendLog(`\n❌ [${agentLabel}] Failed (${duration}s): ${e.message?.slice(0, 200)}\n`);
+    if (stdout) appendLog(projectId, `\n${stdout}\n`);
+    if (stderr) appendLog(projectId, `\n⚠️ STDERR: ${stderr}\n`);
+    appendLog(projectId, `\n❌ [${agentLabel}] Failed (${duration}s): ${e.message?.slice(0, 200)}\n`);
 
+    const errorStr = stderr || e.message || "Unknown error";
     return {
       success: false,
       output: stdout,
-      error: stderr || e.message || "Unknown error",
+      error: errorStr,
+      errorKind: classifyError(errorStr),
       durationMs: Date.now() - startTime,
       tokensUsed: undefined,
     };
   } finally {
     try { fs.unlinkSync(promptFile); } catch {}
-    try { fs.unlinkSync(sysFile); } catch {}
   }
 }

@@ -8,7 +8,7 @@ import { useState, useEffect, useRef, useMemo } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
-import { parseLogSections, formatLogLine, type LogSection } from "@/lib/log-highlighter";
+import { parseLogSections, formatLogLine } from "@/lib/log-highlighter";
 
 interface EnhancedLogPanelProps {
   logContent: string;
@@ -16,7 +16,7 @@ interface EnhancedLogPanelProps {
   currentAgent?: string | null;
 }
 
-export function EnhancedLogPanel({ logContent, loading, currentAgent }: EnhancedLogPanelProps) {
+export function EnhancedLogPanel({ logContent, loading }: EnhancedLogPanelProps) {
   const [searchQuery, setSearchQuery] = useState("");
   const [collapsedSections, setCollapsedSections] = useState<Set<number>>(new Set());
   const logRef = useRef<HTMLDivElement>(null);
@@ -121,7 +121,7 @@ export function EnhancedLogPanel({ logContent, loading, currentAgent }: Enhanced
       >
         {filteredSections.length === 0 && searchQuery ? (
           <div className="p-4 text-center text-muted-foreground text-sm">
-            No results for "{searchQuery}"
+            No results for &ldquo;{searchQuery}&rdquo;
           </div>
         ) : filteredSections.length === 0 ? (
           <div className="p-4 text-muted-foreground text-xs whitespace-pre-wrap">

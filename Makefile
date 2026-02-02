@@ -1,4 +1,4 @@
-.PHONY: setup dev stop db-reset build lint typecheck clean-all watch
+.PHONY: setup dev stop db-reset build lint typecheck clean-all watch logs
 
 setup:
 	npm install
@@ -28,6 +28,3 @@ typecheck:
 
 clean-all:
 	docker compose down -v --rmi all
-
-watch:
-	docker compose watch

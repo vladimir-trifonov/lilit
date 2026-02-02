@@ -5,32 +5,42 @@
  * Writes logs to log file, results to DB.
  */
 import "dotenv/config";
+import fs from "fs";
 import { orchestrate } from "./orchestrator";
 import { clearLog, setWorkerPid } from "./claude-code";
 
 const args = process.argv.slice(2);
 const projectId = args[0];
 const conversationId = args[1];
-const userMessage = args[2];
+const msgFile = args[2];
+const runId = args[3];
+const resumeRunId = args[4]; // optional — if present, resume from this run
+
+// Read user message from temp file and clean up
+const userMessage = fs.readFileSync(msgFile, "utf-8");
+try { fs.unlinkSync(msgFile); } catch {}
 
 if (!projectId || !conversationId || !userMessage) {
-  console.error("Usage: worker.ts <projectId> <conversationId> <userMessage>");
+  console.error("Usage: worker.ts <projectId> <conversationId> <userMessage> [runId] [resumeRunId]");
   process.exit(1);
 }
 
-const runId = `run-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-
 async function main() {
-  // Write PID for abort functionality
-  setWorkerPid(process.pid);
+  // Write PID for abort functionality (project-scoped)
+  setWorkerPid(projectId, process.pid);
 
-  clearLog();
+  // Only clear log on fresh runs, not on resume
+  if (!resumeRunId) {
+    clearLog(projectId);
+  }
+
   try {
     const result = await orchestrate({
       projectId,
       conversationId,
       userMessage,
-      runId,
+      runId: runId || undefined,
+      resumeRunId: resumeRunId || undefined,
     });
 
     // Write result to stdout as JSON for the caller
@@ -39,7 +49,7 @@ async function main() {
       response: result.response,
       steps: result.steps,
       plan: result.plan,
-      runId,
+      runId: result.runId ?? runId,
     }));
   } catch (err) {
     const msg = err instanceof Error ? err.message : "Unknown error";

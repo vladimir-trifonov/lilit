@@ -102,7 +102,7 @@ export function parseLogSections(logContent: string): LogSection[] {
 /**
  * Simple syntax highlighting for code blocks
  */
-export function highlightCode(code: string, language?: string): string {
+export function highlightCode(code: string): string {
   // JavaScript/TypeScript patterns
   const patterns = [
     // Comments

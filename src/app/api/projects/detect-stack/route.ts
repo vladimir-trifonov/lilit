@@ -4,7 +4,7 @@
  */
 
 import { NextResponse } from "next/server";
-import { detectStack, getProjectInfo } from "@/lib/stack-detector";
+import { getProjectInfo } from "@/lib/stack-detector";
 
 export const dynamic = "force-dynamic";
 

@@ -1,3 +1,10 @@
+---
+name: static-analysis
+description: Static analysis toolkit with CodeQL, Semgrep, and SARIF parsing for security vulnerability detection
+tags: [security, review]
+agents: [developer]
+---
+
 # Static Analysis
 
 A comprehensive static analysis toolkit with CodeQL, Semgrep, and SARIF parsing for security vulnerability detection.

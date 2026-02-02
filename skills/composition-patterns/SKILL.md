@@ -6,6 +6,8 @@ description:
   designing reusable APIs. Triggers on tasks involving compound components,
   render props, context providers, or component architecture. Includes React 19
   API changes.
+tags: [react, code]
+agents: [developer]
 license: MIT
 metadata:
   author: vercel

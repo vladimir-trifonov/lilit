@@ -20,6 +20,7 @@ interface Props {
   onSelect: (p: Project) => void;
   onProjectCreated: (p: Project) => void;
   isCollapsed: boolean;
+  runningProjectIds?: Set<string>;
 }
 
 const COLORS = [
@@ -47,12 +48,22 @@ function getProjectColor(id: string) {
   return COLORS[Math.abs(hash) % COLORS.length];
 }
 
+function RunningDot() {
+  return (
+    <span className="relative flex h-2.5 w-2.5">
+      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75" />
+      <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-green-500" />
+    </span>
+  );
+}
+
 export function ProjectSelector({
   projects,
   activeProject,
   onSelect,
   onProjectCreated,
   isCollapsed,
+  runningProjectIds,
 }: Props) {
   const [showNewForm, setShowNewForm] = useState(false);
 
@@ -72,6 +83,7 @@ export function ProjectSelector({
         <div className={isCollapsed ? "flex flex-col items-center gap-2" : "space-y-1"}>
           {projects.map((p) => {
             const isActive = activeProject?.id === p.id;
+            const isRunning = runningProjectIds?.has(p.id) ?? false;
             const initials = p.name.substring(0, 2).toUpperCase();
             const colorClass = getProjectColor(p.id);
 
@@ -82,18 +94,24 @@ export function ProjectSelector({
                   <TooltipTrigger asChild>
                     <button
                       onClick={() => onSelect(p)}
-                      className={`w-10 h-10 rounded-md flex items-center justify-center transition-all ${
+                      className={`relative w-10 h-10 rounded-md flex items-center justify-center transition-all ${
                         isActive
                           ? "bg-primary text-primary-foreground shadow-md ring-2 ring-primary ring-offset-2 ring-offset-sidebar"
                           : `hover:ring-2 hover:ring-ring hover:ring-offset-1 hover:ring-offset-sidebar ${colorClass}`
                       } ${!isActive && colorClass}`}
                     >
                       <span className="text-xs font-bold tracking-tight">{initials}</span>
+                      {isRunning && (
+                        <span className="absolute -top-0.5 -right-0.5">
+                          <RunningDot />
+                        </span>
+                      )}
                     </button>
                   </TooltipTrigger>
                   <TooltipContent side="right">
                     <p className="font-medium">{p.name}</p>
                     <p className="text-xs text-muted-foreground">{p.path}</p>
+                    {isRunning && <p className="text-xs text-green-400">Running...</p>}
                   </TooltipContent>
                 </Tooltip>
               );
@@ -110,10 +128,15 @@ export function ProjectSelector({
                     : "text-muted-foreground hover:bg-sidebar-accent/50 hover:text-sidebar-accent-foreground"
                 }`}
               >
-                <div className={`w-8 h-8 rounded flex items-center justify-center shrink-0 transition-transform group-hover:scale-105 ${colorClass}`}>
+                <div className={`relative w-8 h-8 rounded flex items-center justify-center shrink-0 transition-transform group-hover:scale-105 ${colorClass}`}>
                    <span className="text-xs font-bold">{initials}</span>
+                   {isRunning && (
+                     <span className="absolute -top-0.5 -right-0.5">
+                       <RunningDot />
+                     </span>
+                   )}
                 </div>
-                <div className="min-w-0">
+                <div className="min-w-0 flex-1">
                   <div className={`font-medium text-sm truncate ${isActive ? "text-foreground" : "text-foreground/80 group-hover:text-foreground"}`}>{p.name}</div>
                   <div className="text-xs text-muted-foreground/70 truncate">{p.path}</div>
                 </div>

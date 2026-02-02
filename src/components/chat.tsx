@@ -11,7 +11,6 @@ import { SettingsPanel } from "@/components/settings-panel";
 import { EnhancedLogPanel } from "@/components/enhanced-log-panel";
 import { PlanConfirmation } from "@/components/plan-confirmation";
 import { AgentsPanel } from "@/components/agents-panel";
-import { ConversationSelector } from "@/components/conversation-selector";
 import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from "@/components/ui/resizable";
 import { parseLogSteps } from "@/lib/log-parser";
 import type { StepInfo } from "@/types/pipeline";
@@ -30,6 +29,13 @@ interface Message {
   createdAt: string;
 }
 
+interface ResumableRun {
+  runId: string;
+  currentStep: number;
+  totalSteps: number;
+  userMessage: string;
+}
+
 export function Chat({ project }: { project: Project }) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
@@ -38,11 +44,11 @@ export function Chat({ project }: { project: Project }) {
   const [logContent, setLogContent] = useState("");
   const [showLog, setShowLog] = useState(true);
   const [showSettings, setShowSettings] = useState(false);
-  const [showConversations, setShowConversations] = useState(false);
   const [useEnhancedLog, setUseEnhancedLog] = useState(true);
   const [currentConversationId, setCurrentConversationId] = useState<string | null>(null);
   const [showAgents, setShowAgents] = useState(false);
   const [pendingPlan, setPendingPlan] = useState<{ runId: string; plan: unknown } | null>(null);
+  const [resumableRun, setResumableRun] = useState<ResumableRun | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const logRef = useRef<HTMLPreElement>(null);
   const logOffsetRef = useRef(0);
@@ -51,6 +57,41 @@ export function Chat({ project }: { project: Project }) {
 
   // Parse pipeline steps from log content
   const pipelineSteps = useMemo(() => parseLogSteps(logContent), [logContent]);
+
+  // Check pipeline status on mount (detect running/resumable pipelines)
+  useEffect(() => {
+    let cancelled = false;
+
+    async function checkPipelineStatus() {
+      try {
+        const res = await fetch(`/api/pipeline?projectId=${project.id}`);
+        const data = await res.json();
+
+        if (cancelled) return;
+
+        if (data.status === "running" || data.status === "awaiting_plan") {
+          // Reconnect to live pipeline
+          setLoading(true);
+          setCurrentAgent("pipeline");
+          setLogContent("");
+          logOffsetRef.current = 0;
+        } else if (data.status === "aborted" && data.totalSteps > 0) {
+          // Show resume banner
+          setResumableRun({
+            runId: data.runId,
+            currentStep: data.currentStep,
+            totalSteps: data.totalSteps,
+            userMessage: data.userMessage,
+          });
+        }
+      } catch {
+        // ignore
+      }
+    }
+
+    checkPipelineStatus();
+    return () => { cancelled = true; };
+  }, [project.id]);
 
   useEffect(() => {
     const loadMessages = async () => {
@@ -80,14 +121,12 @@ export function Chat({ project }: { project: Project }) {
     }
   }, [logContent]);
 
-  // Poll logs while loading
+  // Poll logs while loading (project-scoped)
   useEffect(() => {
     if (loading) {
-      logOffsetRef.current = 0;
-      setLogContent("");
       pollRef.current = setInterval(async () => {
         try {
-          const res = await fetch(`/api/logs?offset=${logOffsetRef.current}`);
+          const res = await fetch(`/api/logs?projectId=${project.id}&offset=${logOffsetRef.current}`);
           const data = await res.json();
           if (data.log) {
             setLogContent((prev) => prev + data.log);
@@ -103,7 +142,7 @@ export function Chat({ project }: { project: Project }) {
         pollRef.current = null;
       }
       // One final poll to get remaining logs
-      fetch(`/api/logs?offset=${logOffsetRef.current}`)
+      fetch(`/api/logs?projectId=${project.id}&offset=${logOffsetRef.current}`)
         .then((r) => r.json())
         .then((data) => {
           if (data.log) setLogContent((prev) => prev + data.log);
@@ -113,14 +152,14 @@ export function Chat({ project }: { project: Project }) {
     return () => {
       if (pollRef.current) clearInterval(pollRef.current);
     };
-  }, [loading]);
+  }, [loading, project.id]);
 
-  // Poll for pending plan while loading
+  // Poll for pending plan while loading (project-scoped)
   useEffect(() => {
     if (loading) {
       planPollRef.current = setInterval(async () => {
         try {
-          const res = await fetch("/api/plan");
+          const res = await fetch(`/api/plan?projectId=${project.id}`);
           const data = await res.json();
           if (data.status === "pending" && data.plan) {
             setPendingPlan({ runId: data.runId, plan: data.plan });
@@ -141,12 +180,16 @@ export function Chat({ project }: { project: Project }) {
     return () => {
       if (planPollRef.current) clearInterval(planPollRef.current);
     };
-  }, [loading]);
+  }, [loading, project.id]);
 
   const handleAbort = useCallback(async () => {
     try {
       setCurrentAgent("stopping...");
-      const res = await fetch("/api/abort", { method: "POST" });
+      const res = await fetch("/api/abort", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ projectId: project.id }),
+      });
       const data = await res.json();
       if (data.aborted) {
         setLogContent((prev) => prev + "\n\n🛑 Stop signal sent. Pipeline will abort...\n");
@@ -155,7 +198,55 @@ export function Chat({ project }: { project: Project }) {
       console.error("Abort failed:", err);
       setLogContent((prev) => prev + "\n\n❌ Failed to send stop signal\n");
     }
-  }, []);
+  }, [project.id]);
+
+  const handleResume = useCallback(async () => {
+    if (!resumableRun) return;
+    setResumableRun(null);
+    setLoading(true);
+    setCurrentAgent("pipeline");
+    setLogContent("");
+    logOffsetRef.current = 0;
+
+    try {
+      await fetch("/api/pipeline", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          projectId: project.id,
+          action: "resume",
+          runId: resumableRun.runId,
+        }),
+      });
+    } catch {
+      setLoading(false);
+      setCurrentAgent(null);
+    }
+  }, [resumableRun, project.id]);
+
+  const handleRestart = useCallback(async () => {
+    if (!resumableRun) return;
+    setResumableRun(null);
+    setLoading(true);
+    setCurrentAgent("pipeline");
+    setLogContent("");
+    logOffsetRef.current = 0;
+
+    try {
+      await fetch("/api/pipeline", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          projectId: project.id,
+          action: "restart",
+          runId: resumableRun.runId,
+        }),
+      });
+    } catch {
+      setLoading(false);
+      setCurrentAgent(null);
+    }
+  }, [resumableRun, project.id]);
 
   async function handleSend() {
     if (!input.trim() || loading) return;
@@ -165,7 +256,8 @@ export function Chat({ project }: { project: Project }) {
     setLoading(true);
     setCurrentAgent("pipeline");
     setLogContent("");
-    setCurrentConversationId(null); // Will be set from response
+    logOffsetRef.current = 0;
+    setResumableRun(null);
 
     setMessages((prev) => [
       ...prev,
@@ -181,7 +273,11 @@ export function Chat({ project }: { project: Project }) {
       const res = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ projectId: project.id, message: userMessage }),
+        body: JSON.stringify({
+          projectId: project.id,
+          message: userMessage,
+          conversationId: currentConversationId,
+        }),
       });
 
       const data = await res.json();
@@ -246,14 +342,6 @@ export function Chat({ project }: { project: Project }) {
           <Button
             variant="ghost"
             size="sm"
-            onClick={() => setShowConversations(!showConversations)}
-            className="text-xs text-zinc-400"
-          >
-            💬 History
-          </Button>
-          <Button
-            variant="ghost"
-            size="sm"
             onClick={() => setShowAgents(true)}
             className="text-xs text-zinc-400"
           >
@@ -297,10 +385,41 @@ export function Chat({ project }: { project: Project }) {
             {/* Messages */}
             <ScrollArea className="h-full w-full">
               <div className="max-w-3xl mx-auto space-y-4 p-4">
-                {messages.length === 0 && !loading && (
+                {messages.length === 0 && !loading && !resumableRun && (
                   <div className="text-center text-muted-foreground py-20">
                     <p className="text-lg mb-1">Start building</p>
                     <p className="text-sm">Tell Lilit what to build.</p>
+                  </div>
+                )}
+
+                {/* Resume banner */}
+                {resumableRun && !loading && (
+                  <div className="bg-yellow-500/10 border border-yellow-500/30 rounded-xl p-4 space-y-3">
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm font-medium text-yellow-400">Pipeline stopped</span>
+                      <Badge variant="outline" className="text-[10px] border-yellow-500/50 text-yellow-400">
+                        Step {resumableRun.currentStep}/{resumableRun.totalSteps}
+                      </Badge>
+                    </div>
+                    <p className="text-xs text-muted-foreground truncate">
+                      {resumableRun.userMessage}
+                    </p>
+                    <div className="flex items-center gap-2">
+                      <Button onClick={handleResume} size="sm" className="text-xs">
+                        Resume
+                      </Button>
+                      <Button onClick={handleRestart} variant="outline" size="sm" className="text-xs">
+                        Restart
+                      </Button>
+                      <Button
+                        onClick={() => setResumableRun(null)}
+                        variant="ghost"
+                        size="sm"
+                        className="text-xs text-muted-foreground"
+                      >
+                        Dismiss
+                      </Button>
+                    </div>
                   </div>
                 )}
 
@@ -320,6 +439,7 @@ export function Chat({ project }: { project: Project }) {
                     {pendingPlan && (
                       <div className="ml-6">
                         <PlanConfirmation
+                          projectId={project.id}
                           runId={pendingPlan.runId}
                           plan={pendingPlan.plan as { analysis: string; needsArchitect: boolean; tasks: { id: number; title: string; description: string; agent: string; role: string; acceptanceCriteria?: string[]; provider?: string; model?: string }[]; pipeline: string[] }}
                           onConfirmed={() => setPendingPlan(null)}
@@ -430,39 +550,23 @@ export function Chat({ project }: { project: Project }) {
         <AgentsPanel onClose={() => setShowAgents(false)} />
       )}
 
-      {/* Conversation History Panel */}
-      {showConversations && (
-        <div className="fixed inset-0 bg-black/50 flex items-end justify-end z-50 p-4">
-          <div className="bg-zinc-900 border border-zinc-800 rounded-lg w-80 h-[600px] flex flex-col">
-            <div className="flex items-center justify-between p-3 border-b border-zinc-800">
-              <h2 className="text-sm font-medium">Conversation History</h2>
-              <Button
-                onClick={() => setShowConversations(false)}
-                variant="ghost"
-                size="sm"
-                className="h-6 px-2 text-xs"
-              >
-                Close
-              </Button>
-            </div>
-            <ConversationSelector
-              projectId={project.id}
-              currentConversationId={currentConversationId}
-              onSelect={(convId) => {
-                setCurrentConversationId(convId);
-                setShowConversations(false);
-              }}
-              onNewConversation={() => {
-                setCurrentConversationId(null);
-                setMessages([]);
-                setShowConversations(false);
-              }}
-            />
-          </div>
-        </div>
-      )}
     </>
   );
+}
+
+function formatMessageTime(dateStr: string): string {
+  const date = new Date(dateStr);
+  const now = new Date();
+  const isToday = date.toDateString() === now.toDateString();
+  const yesterday = new Date(now);
+  yesterday.setDate(yesterday.getDate() - 1);
+  const isYesterday = date.toDateString() === yesterday.toDateString();
+
+  const time = date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+
+  if (isToday) return time;
+  if (isYesterday) return `Yesterday ${time}`;
+  return `${date.toLocaleDateString([], { month: "short", day: "numeric" })} ${time}`;
 }
 
 function MessageBubble({ message }: { message: Message }) {
@@ -490,9 +594,14 @@ function MessageBubble({ message }: { message: Message }) {
               : "bg-surface text-surface-foreground border border-border/50"
         }`}
       >
-        {!isUser && !isSystem && (
-          <div className="text-xs text-muted-foreground mb-1 font-medium">Lilit</div>
-        )}
+        <div className="flex items-center gap-2 mb-1">
+          {!isUser && !isSystem && (
+            <span className="text-xs text-muted-foreground font-medium">Lilit</span>
+          )}
+          <span className={`text-[10px] ${isUser ? "text-primary-foreground/60" : "text-muted-foreground/60"} ml-auto`}>
+            {formatMessageTime(message.createdAt)}
+          </span>
+        </div>
         <div className="text-sm whitespace-pre-wrap break-words">{message.content}</div>
 
         {steps.length > 0 && (

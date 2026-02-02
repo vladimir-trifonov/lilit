@@ -3,8 +3,15 @@ import { findPendingPlan, writeConfirmation } from "@/lib/plan-gate";
 
 export const dynamic = "force-dynamic";
 
-export async function GET() {
-  const pending = findPendingPlan();
+export async function GET(req: Request) {
+  const { searchParams } = new URL(req.url);
+  const projectId = searchParams.get("projectId");
+
+  if (!projectId) {
+    return NextResponse.json({ status: "none" });
+  }
+
+  const pending = findPendingPlan(projectId);
 
   if (!pending) {
     return NextResponse.json({ status: "none" });
@@ -19,11 +26,11 @@ export async function GET() {
 
 export async function POST(req: Request) {
   const body = await req.json();
-  const { runId, action, notes } = body;
+  const { projectId, runId, action, notes } = body;
 
-  if (!runId || !action) {
+  if (!projectId || !runId || !action) {
     return NextResponse.json(
-      { error: "runId and action are required" },
+      { error: "projectId, runId and action are required" },
       { status: 400 }
     );
   }
@@ -35,7 +42,7 @@ export async function POST(req: Request) {
     );
   }
 
-  writeConfirmation(runId, action, notes);
+  writeConfirmation(projectId, runId, action, notes);
 
   return NextResponse.json({ success: true, action });
 }

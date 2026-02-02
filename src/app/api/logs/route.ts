@@ -6,10 +6,15 @@ export const dynamic = "force-dynamic";
 
 export async function GET(req: Request) {
   const { searchParams } = new URL(req.url);
+  const projectId = searchParams.get("projectId");
   const offset = parseInt(searchParams.get("offset") || "0", 10);
 
+  if (!projectId) {
+    return NextResponse.json({ log: "", offset: 0 });
+  }
+
   try {
-    const logFile = getLogFile();
+    const logFile = getLogFile(projectId);
     if (!fs.existsSync(logFile)) {
       return NextResponse.json({ log: "", offset: 0 });
     }

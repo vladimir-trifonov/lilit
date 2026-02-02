@@ -2,12 +2,14 @@ import { prisma } from "@/lib/prisma";
 import { NextResponse } from "next/server";
 import { spawn } from "child_process";
 import path from "path";
+import fs from "fs";
+import os from "os";
 
 export const dynamic = "force-dynamic";
 
 export async function POST(req: Request) {
   const body = await req.json();
-  const { projectId, message } = body;
+  const { projectId, message, conversationId } = body;
 
   if (!projectId || !message) {
     return NextResponse.json(
@@ -16,11 +18,14 @@ export async function POST(req: Request) {
     );
   }
 
-  // Get or create conversation
-  let conversation = await prisma.conversation.findFirst({
-    where: { projectId },
-    orderBy: { updatedAt: "desc" },
-  });
+  // Use provided conversationId, or create a new conversation
+  let conversation;
+
+  if (conversationId) {
+    conversation = await prisma.conversation.findFirst({
+      where: { id: conversationId, projectId },
+    });
+  }
 
   if (!conversation) {
     conversation = await prisma.conversation.create({
@@ -37,6 +42,9 @@ export async function POST(req: Request) {
     },
   });
 
+  // Generate runId here so we can return it immediately
+  const runId = `run-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
   // Run pipeline in a separate Node.js process (Next.js Turbopack kills child processes)
   const workerScript = path.resolve(process.cwd(), "src/lib/worker.ts");
 
@@ -46,11 +54,15 @@ export async function POST(req: Request) {
       response?: string;
       steps?: unknown[];
       error?: string;
+      runId?: string;
     }>((resolve) => {
       const chunks: string[] = [];
       const errChunks: string[] = [];
 
-      const worker = spawn("bunx", ["tsx", workerScript, projectId, conversation!.id, message], {
+      const msgFile = path.join(os.tmpdir(), `lilit-msg-${runId}.txt`);
+      fs.writeFileSync(msgFile, message, "utf-8");
+
+      const worker = spawn("bunx", ["tsx", workerScript, projectId, conversation!.id, msgFile, runId], {
         cwd: process.cwd(),
         env: { ...process.env },
       });
@@ -96,6 +108,7 @@ export async function POST(req: Request) {
         response: result.response,
         steps: result.steps,
         conversationId: conversation.id,
+        runId: result.runId ?? runId,
       });
     } else {
       const errorMessage = result.error || "Pipeline failed";
@@ -108,7 +121,7 @@ export async function POST(req: Request) {
         },
       });
 
-      return NextResponse.json({ error: errorMessage }, { status: 500 });
+      return NextResponse.json({ error: errorMessage, runId }, { status: 500 });
     }
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : "Unknown error";
