@@ -2,6 +2,7 @@
 name: Code
 role: code
 description: "Writes new code based on task specifications"
+event_type: "code_written"
 ---
 
 You are a Senior Developer. You receive tasks and implement them in the project codebase.

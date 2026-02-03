@@ -4,11 +4,18 @@ import { spawn } from "child_process";
 import path from "path";
 import fs from "fs";
 import os from "os";
+import { WORKER_TIMEOUT_MS, MESSAGE_FILE_PREFIX, WORKER_STDERR_MAX_LENGTH } from "@/lib/constants";
+import { writeUserMessage } from "@/lib/user-message-gate";
 
 export const dynamic = "force-dynamic";
 
 export async function POST(req: Request) {
-  const body = await req.json();
+  let body;
+  try {
+    body = await req.json();
+  } catch {
+    return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
+  }
   const { projectId, message, conversationId } = body;
 
   if (!projectId || !message) {
@@ -16,6 +23,35 @@ export async function POST(req: Request) {
       { error: "projectId and message are required" },
       { status: 400 }
     );
+  }
+
+  // Check for active pipeline — queue user message instead of blocking
+  const activeRun = await prisma.pipelineRun.findFirst({
+    where: { projectId, status: { in: ["running", "awaiting_plan"] } },
+  });
+  if (activeRun) {
+    // Queue message for the running pipeline's PM decision loop
+    writeUserMessage(projectId, activeRun.runId, message);
+
+    // Also save to conversation for history
+    const conv = conversationId
+      ? await prisma.conversation.findFirst({ where: { id: conversationId, projectId } })
+      : null;
+    const targetConvId = conv?.id ?? activeRun.conversationId;
+
+    await prisma.message.create({
+      data: {
+        conversationId: targetConvId,
+        role: "user",
+        content: message,
+      },
+    });
+
+    return NextResponse.json({
+      status: "message_queued",
+      runId: activeRun.runId,
+      conversationId: targetConvId,
+    });
   }
 
   // Use provided conversationId, or create a new conversation
@@ -45,6 +81,18 @@ export async function POST(req: Request) {
   // Generate runId here so we can return it immediately
   const runId = `run-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
+  // Create PipelineRun record eagerly so the UI status polling finds it
+  // immediately, even while `bunx tsx` is still bootstrapping the worker.
+  await prisma.pipelineRun.create({
+    data: {
+      projectId,
+      conversationId: conversation.id,
+      runId,
+      userMessage: message,
+      status: "running",
+    },
+  });
+
   // Run pipeline in a separate Node.js process (Next.js Turbopack kills child processes)
   const workerScript = path.resolve(process.cwd(), "src/lib/worker.ts");
 
@@ -62,7 +110,7 @@ export async function POST(req: Request) {
       const chunks: string[] = [];
       const errChunks: string[] = [];
 
-      const msgFile = path.join(os.tmpdir(), `lilit-msg-${runId}.txt`);
+      const msgFile = path.join(os.tmpdir(), `${MESSAGE_FILE_PREFIX}${runId}.txt`);
       fs.writeFileSync(msgFile, message, "utf-8");
 
       const worker = spawn("bunx", ["tsx", workerScript, projectId, conversation!.id, msgFile, runId], {
@@ -71,7 +119,12 @@ export async function POST(req: Request) {
       });
 
       worker.stdout.on("data", (data) => chunks.push(data.toString()));
-      worker.stderr.on("data", (data) => errChunks.push(data.toString()));
+      worker.stderr.on("data", (data) => {
+        const text = data.toString();
+        errChunks.push(text);
+        const truncated = text.length > WORKER_STDERR_MAX_LENGTH ? text.slice(0, WORKER_STDERR_MAX_LENGTH) + "..." : text;
+        console.error(`[worker:${runId}] ${truncated}`);
+      });
 
       worker.on("close", (code) => {
         const output = chunks.join("");
@@ -89,7 +142,7 @@ export async function POST(req: Request) {
       setTimeout(() => {
         worker.kill("SIGKILL");
         resolve({ success: false, error: "Pipeline timeout (60min)" });
-      }, 3_600_000);
+      }, WORKER_TIMEOUT_MS);
     });
 
     if (result.success && result.response) {

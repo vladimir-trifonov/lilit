@@ -36,6 +36,27 @@ A PM who plans. An Architect who designs. A Developer who codes. A QA engineer w
 | **Learning** | Starts fresh every time | Pipeline Memory feeds past insights into future plans |
 | **Accountability** | None | Agents critique each other in post-pipeline standups |
 
+## "My AI coding tool already has agents and skills"
+
+Claude Code ships skills, task management, and sub-agents. Cursor has multi-file editing. Copilot Workspace generates plans. So why run a whole team?
+
+Because **a single agent with a to-do list is not a team.**
+
+A team has specialists who disagree, reviewers who block, and a QA engineer who runs your tests before you see the output. That feedback loop -- where one agent's output is another agent's input to critique -- is what produces reliable code, not a better prompt.
+
+| | Single-Agent + Skills | Lilit |
+| :--- | :--- | :--- |
+| **Review** | Agent reviews its own code | Separate Reviewer agent with different evaluation criteria blocks bad code |
+| **Testing** | You run tests after | QA agent runs Playwright tests *during* the pipeline, fails the build if they don't pass |
+| **Fix cycles** | You read the error, re-prompt | PM reads the failure, creates a fix plan, Developer patches, QA re-tests (up to 3 rounds) |
+| **Planning** | Inline task list, no approval gate | PM writes a structured plan, you approve it in the UI before anything executes |
+| **Cost** | One model does everything | Gemini plans ($0.01), Claude codes ($0.15) -- hybrid routing per agent capability |
+| **Memory** | Session-scoped context | RAG-backed pipeline memory -- past standup insights feed into future plans |
+| **Accountability** | None -- agent marks its own work done | Post-pipeline standups where agents critique each other across domain boundaries |
+| **Relationships** | None | Trust, tension, and rapport scores evolve between agents and influence future interactions |
+
+The difference isn't features. It's architecture. A single agent with skills is a solo developer with good documentation. Lilit is a team with code review, QA, and a PM who won't let you ship without tests.
+
 ## Meet the Team
 
 Every agent has a **personality**, a domain lens, and opinions. They aren't polite assistants -- they're opinionated specialists.
@@ -151,14 +172,15 @@ The fallback is **capability-aware** -- Kai (Developer) won't fall back to Gemin
 
 ## Real-World Performance
 
-*Building a complete "To-Do List" app with Next.js & localStorage:*
+<!-- TODO: TO be updated -->
+<!-- *Building a complete "To-Do List" app with Next.js & localStorage:*
 
 | Metric | Value |
 |--------|-------|
 | Duration | 10 min 30 sec |
 | Agents | PM, Architect, Developer, QA |
 | Tests Run | 15 Playwright tests (100% pass) |
-| Total Cost | **~$0.18** |
+| Total Cost | **~$0.18** | -->
 
 ## Getting Started
 
@@ -216,15 +238,17 @@ Visit `http://localhost:3000` to create your first project.
 - [x] Pipeline Memory (RAG-backed, feeds into future planning)
 - [x] Provider auto-fallback with error classification
 - [x] Budget guardrails and cost tracking per agent run
+- [x] Voice standups (TTS with agent-specific voices)
+- [x] Live inter-agent messaging during pipeline execution
+- [x] Adaptive pipeline (PM modifies plan mid-execution based on live feedback)
 
 **In Progress**
-- [ ] Voice standups (TTS with agent-specific voices)
-- [ ] Git integration (auto-create branches and PRs)
-- [ ] Live inter-agent messaging during pipeline execution
-- [ ] Trend detection across standup history
+- [ ] Use context7 mcp and playwright
+- [ ] Telegram integration
 
 **Planned**
-- [ ] Adaptive pipeline (PM modifies plan mid-execution based on live feedback)
+- [ ] Git integration (auto-create branches and PRs)
+- [ ] Trend detection across standup history
 - [ ] VS Code extension
 - [ ] Multi-user auth
 - [ ] Skill marketplace

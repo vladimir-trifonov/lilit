@@ -1,4 +1,4 @@
-.PHONY: setup dev stop db-reset build lint typecheck clean-all watch logs
+.PHONY: setup dev stop db-reset build lint format typecheck clean-all watch logs
 
 setup:
 	npm install
@@ -22,6 +22,9 @@ build:
 
 lint:
 	npm run lint
+
+format:
+	npx eslint --fix .
 
 typecheck:
 	npx tsc --noEmit

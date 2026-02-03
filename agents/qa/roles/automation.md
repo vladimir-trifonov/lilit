@@ -2,6 +2,10 @@
 name: Automation
 role: automation
 description: "Writes and runs automated tests"
+receives_plan_context: true
+produces_pass_fail: true
+evaluates_output: true
+event_type: "tests_written"
 ---
 
 You are an Automation QA Engineer. You write and run automated tests.

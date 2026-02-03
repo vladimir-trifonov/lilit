@@ -7,19 +7,21 @@ datasource db {
 }
 
 model Project {
-  id          String   @id @default(cuid())
+  id          String    @id @default(cuid())
   name        String
-  path        String   // workspace directory path
+  path        String    // workspace directory path
   description String?
-  stack       String?  // "nextjs" | "python" | "react" | etc.
-  settings    String?  // JSON: agent models, budget limits, enabled agents
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  stack       String?   // "nextjs" | "python" | "react" | etc.
+  settings    String?   // JSON: agent models, budget limits, enabled agents
+  deletedAt   DateTime? // null = active, set = soft-deleted
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
 
   conversations      Conversation[]
   agentRuns          AgentRun[]
   eventLogs          EventLog[]
   pipelineRuns       PipelineRun[]
+  tasks              Task[]
   memories           Memory[]
   agentRelationships AgentRelationship[]
 
@@ -106,12 +108,20 @@ model PipelineRun {
   runningCost    Float    @default(0)
   error          String?
 
+  // Dynamic orchestration fields
+  taskGraph      String?  // JSON: TaskGraph
+  decisionCount  Int      @default(0)
+
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
-  agentRuns        AgentRun[]
-  standupMessages  StandupMessage[]
-  agentMessages    AgentMessage[]
+  agentRuns           AgentRun[]
+  tasks               Task[]
+  standupMessages     StandupMessage[]
+  agentMessages       AgentMessage[]
+  debateRounds        DebateRound[]
+  userMessages        UserPipelineMessage[]
+  pmDecisionLogs      PMDecisionLog[]
 
   @@index([projectId, status])
   @@index([runId])
@@ -151,10 +161,92 @@ model AgentMessage {
   parentId       String?        // reply-to message ID (threaded conversations)
   parent         AgentMessage?  @relation("MessageThread", fields: [parentId], references: [id])
   replies        AgentMessage[] @relation("MessageThread")
+  debateId       String?        // groups turns of the same debate
+  debateRole     String?        // "challenger" | "defender" | "moderator"
   createdAt      DateTime       @default(now())
 
   @@index([pipelineRunId, toAgent])
   @@index([parentId])
+  @@index([debateId])
+}
+
+model DebateRound {
+  id              String      @id @default(cuid())
+  pipelineRunId   String
+  pipelineRun     PipelineRun @relation(fields: [pipelineRunId], references: [id], onDelete: Cascade)
+  challengerAgent String
+  defenderAgent   String
+  triggerOpinion  String
+  conflictSnippet String
+  outcome         String      // "accepted" | "revised" | "compromise" | "escalated"
+  turnCount       Int
+  resolutionNote  String?
+  costUsd         Float       @default(0)
+  stepIndex       Int
+  createdAt       DateTime    @default(now())
+
+  @@index([pipelineRunId])
+}
+
+model Task {
+  id              String        @id @default(cuid())
+  projectId       String
+  project         Project       @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  pipelineRunId   String?
+  pipelineRun     PipelineRun?  @relation(fields: [pipelineRunId], references: [id], onDelete: SetNull)
+  parentId        String?
+  parent          Task?         @relation("SubTasks", fields: [parentId], references: [id])
+  children        Task[]        @relation("SubTasks")
+
+  // Content
+  title           String
+  description     String
+  acceptanceCriteria String[]
+  skills          String[]
+
+  // Assignment
+  assignedAgent   String?
+  assignedRole    String?
+  provider        String?
+  model           String?
+
+  // Lifecycle: created -> assigned -> in_progress -> done | failed | blocked | cancelled | skipped
+  status          String        @default("created")
+  sequenceOrder   Int           @default(0)
+
+  // Dynamic orchestration fields
+  graphId         String?       // "t1", "t2" etc.
+  dependsOn       String[]      // graph IDs this depends on
+  attempts        Int           @default(0)
+  maxAttempts     Int           @default(3)
+
+  // Output
+  output          String?
+  outputSummary   String?
+  costUsd         Float         @default(0)
+
+  // Timestamps
+  startedAt       DateTime?
+  completedAt     DateTime?
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  notes           TaskNote[]
+
+  @@index([projectId, status])
+  @@index([pipelineRunId])
+  @@index([assignedAgent])
+}
+
+model TaskNote {
+  id        String   @id @default(cuid())
+  taskId    String
+  task      Task     @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  author    String   // agent type or "user" or "system"
+  content   String
+  createdAt DateTime @default(now())
+
+  @@index([taskId])
 }
 
 model Memory {
@@ -193,4 +285,46 @@ model AgentRelationship {
 
   @@unique([projectId, fromAgent, toAgent])
   @@index([projectId])
+}
+
+model UserPipelineMessage {
+  id             String      @id @default(cuid())
+  pipelineRunId  String
+  pipelineRun    PipelineRun @relation(fields: [pipelineRunId], references: [id], onDelete: Cascade)
+  content        String
+  processed      Boolean     @default(false)
+  createdAt      DateTime    @default(now())
+
+  @@index([pipelineRunId, processed])
+}
+
+model PMDecisionLog {
+  id             String      @id @default(cuid())
+  pipelineRunId  String
+  pipelineRun    PipelineRun @relation(fields: [pipelineRunId], references: [id], onDelete: Cascade)
+  triggerType    String
+  triggerData    String      // JSON
+  decision       String      // JSON: PMDecision
+  costUsd        Float       @default(0)
+  createdAt      DateTime    @default(now())
+
+  @@index([pipelineRunId])
+}
+
+model OAuthAccount {
+  id               String    @id @default(cuid())
+  provider         String    // "antigravity"
+  email            String
+  accessToken      String
+  refreshToken     String
+  expiresAt        DateTime
+  source           String    // "browser" | "opencode"
+  disabled         Boolean   @default(false)
+  rateLimitedUntil DateTime?
+  lastUsedAt       DateTime?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  @@unique([provider, email])
+  @@index([provider, disabled])
 }

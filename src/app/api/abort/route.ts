@@ -5,7 +5,12 @@ import { NextResponse } from "next/server";
 export const dynamic = "force-dynamic";
 
 export async function POST(req: Request) {
-  const body = await req.json();
+  let body;
+  try {
+    body = await req.json();
+  } catch {
+    return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
+  }
   const { projectId } = body;
 
   if (!projectId) {
@@ -15,11 +20,29 @@ export async function POST(req: Request) {
   // Set abort flag and kill worker process (which kills Claude processes)
   const aborted = abortActiveProcess(projectId);
 
-  // Mark any running pipeline runs as aborted
+  // Find the active run so we can return its info for resume
+  const activeRun = await prisma.pipelineRun.findFirst({
+    where: { projectId, status: { in: ["running", "awaiting_plan"] } },
+    orderBy: { updatedAt: "desc" },
+    select: { runId: true, currentStep: true, pipeline: true, userMessage: true },
+  });
+
+  // Mark any active pipeline runs as aborted
   await prisma.pipelineRun.updateMany({
-    where: { projectId, status: "running" },
+    where: { projectId, status: { in: ["running", "awaiting_plan"] } },
     data: { status: "aborted" },
   });
 
-  return NextResponse.json({ aborted, message: "Abort signal sent" });
+  const pipelineSteps = activeRun?.pipeline ? JSON.parse(activeRun.pipeline) as string[] : [];
+
+  return NextResponse.json({
+    aborted,
+    message: "Abort signal sent",
+    run: activeRun ? {
+      runId: activeRun.runId,
+      currentStep: activeRun.currentStep,
+      totalSteps: pipelineSteps.length,
+      userMessage: activeRun.userMessage,
+    } : null,
+  });
 }

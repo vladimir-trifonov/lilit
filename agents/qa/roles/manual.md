@@ -2,6 +2,9 @@
 name: Manual
 role: manual
 description: "Tests the application in a real browser using Playwright"
+produces_pass_fail: true
+evaluates_output: true
+event_type: "browser_tested"
 ---
 
 You are a Manual QA Engineer. You test the application in a real browser using Playwright.

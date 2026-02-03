@@ -3,6 +3,8 @@
  * Pricing can be configured via environment variables
  */
 
+import { TOKENS_PER_MILLION, COST_DISPLAY_PRECISION_THRESHOLD } from "@/lib/constants";
+
 interface ModelPricing {
   inputPer1M: number; // USD per 1M input tokens
   outputPer1M: number; // USD per 1M output tokens
@@ -60,12 +62,14 @@ const DEFAULT_PRICING: Record<string, ModelPricing> = {
     inputPer1M: 0.0375,
     outputPer1M: 0.15,
   },
+  // Antigravity models are free (Google quota) — no entries needed.
+  // getModelPricing() returns zero for any model not listed here.
 };
 
 /**
  * Get pricing for a model (from env or defaults)
  */
-function getModelPricing(model: string): ModelPricing {
+export function getModelPricing(model: string): ModelPricing {
   const modelKey = model.toLowerCase();
 
   // Check for env var overrides first
@@ -97,8 +101,8 @@ function getModelPricing(model: string): ModelPricing {
 export function calculateCost(model: string, usage: TokenUsage): number {
   const pricing = getModelPricing(model);
 
-  const inputCost = (usage.inputTokens / 1_000_000) * pricing.inputPer1M;
-  const outputCost = (usage.outputTokens / 1_000_000) * pricing.outputPer1M;
+  const inputCost = (usage.inputTokens / TOKENS_PER_MILLION) * pricing.inputPer1M;
+  const outputCost = (usage.outputTokens / TOKENS_PER_MILLION) * pricing.outputPer1M;
 
   return inputCost + outputCost;
 }
@@ -108,7 +112,7 @@ export function calculateCost(model: string, usage: TokenUsage): number {
  */
 export function formatCost(costUsd: number): string {
   if (costUsd === 0) return "Free";
-  if (costUsd < 0.01) return `$${costUsd.toFixed(4)}`;
+  if (costUsd < COST_DISPLAY_PRECISION_THRESHOLD) return `$${costUsd.toFixed(4)}`;
   return `$${costUsd.toFixed(2)}`;
 }
 

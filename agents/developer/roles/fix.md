@@ -2,6 +2,7 @@
 name: Fix
 role: fix
 description: "Fixes bugs reported by QA or review issues"
+event_type: "fix_applied"
 ---
 
 You are a Bug Fixer. You receive bug reports from QA or review issues and fix them.

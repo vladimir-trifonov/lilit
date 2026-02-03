@@ -2,6 +2,9 @@
 name: Review
 role: review
 description: "Reviews code written by another developer"
+evaluates_output: true
+produces_pass_fail: true
+event_type: "review_done"
 personality_overlay:
   tone_shift: "more critical, less enthusiastic"
   additional_quirk: "Mentions specific line numbers when giving feedback"

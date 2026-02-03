@@ -1,5 +1,8 @@
 /**
- * Parse live log content to extract pipeline steps and their status
+ * Parse live log content to extract pipeline steps and their status.
+ *
+ * Steps are seeded from the "🔄 Pipeline:" line and then dynamically extended
+ * when fix cycles inject new steps via "📍 STEP X/Y:" markers.
  */
 
 import type { PipelineStep } from "@/types/pipeline";
@@ -11,30 +14,29 @@ export function parseLogSteps(logContent: string): PipelineStep[] {
   const steps: PipelineStep[] = [];
   const lines = logContent.split("\n");
 
-  let currentStep: Partial<PipelineStep> | null = null;
-  let planSteps: string[] = [];
-
   for (const line of lines) {
     // Parse pipeline plan: "🔄 Pipeline: pm → developer:code → developer:review"
     const pipelineMatch = line.match(/🔄 Pipeline: (.+)/);
     if (pipelineMatch) {
-      planSteps = pipelineMatch[1]
+      const planSteps = pipelineMatch[1]
         .split("→")
         .map((s) => s.trim())
         .filter(Boolean);
 
-      // Initialize all steps as pending
-      planSteps.forEach((stepLabel, idx) => {
-        const [agent, role] = stepLabel.split(":") as [string, string | undefined];
-        steps.push({
-          agent,
-          role,
-          title: stepLabel,
-          status: "pending",
-          stepNumber: idx + 1,
-          totalSteps: planSteps.length,
+      // Initialize all steps as pending (only on the first pipeline line)
+      if (steps.length === 0) {
+        planSteps.forEach((stepLabel, idx) => {
+          const [agent, role] = stepLabel.split(":") as [string, string | undefined];
+          steps.push({
+            agent,
+            role,
+            title: stepLabel,
+            status: "pending",
+            stepNumber: idx + 1,
+            totalSteps: planSteps.length,
+          });
         });
-      });
+      }
       continue;
     }
 
@@ -45,49 +47,60 @@ export function parseLogSteps(logContent: string): PipelineStep[] {
       const totalSteps = parseInt(stepStartMatch[2]);
       const agent = stepStartMatch[3] as string;
       const role = stepStartMatch[4] as string | undefined;
+      const title = role ? `${agent}:${role}` : agent;
 
-      currentStep = {
-        agent,
-        role,
-        title: role ? `${agent}:${role}` : agent,
-        status: "running",
-        stepNumber: stepNum,
-        totalSteps,
-      };
-
-      // Update step in list if it exists
-      const existingIdx = steps.findIndex(
-        (s) => s.stepNumber === stepNum || (s.agent === agent && s.role === role)
-      );
-      if (existingIdx >= 0) {
-        steps[existingIdx].status = "running";
-      } else {
-        steps.push(currentStep as PipelineStep);
+      // Update totalSteps on all existing steps when fix cycles expand the pipeline
+      if (totalSteps > (steps[0]?.totalSteps ?? 0)) {
+        for (const s of steps) s.totalSteps = totalSteps;
       }
+
+      // Find by step number first, then by agent:role match
+      const existingIdx = steps.findIndex(
+        (s) => s.stepNumber === stepNum || (s.agent === agent && s.role === role && s.status === "pending")
+      );
+
+      if (existingIdx >= 0) {
+        // Update existing step (may have changed agent:role due to fix injection)
+        steps[existingIdx].agent = agent;
+        steps[existingIdx].role = role;
+        steps[existingIdx].title = title;
+        steps[existingIdx].status = "running";
+        steps[existingIdx].stepNumber = stepNum;
+        steps[existingIdx].totalSteps = totalSteps;
+      } else {
+        // Injected step not in the original plan — add it
+        steps.push({
+          agent,
+          role,
+          title,
+          status: "running",
+          stepNumber: stepNum,
+          totalSteps,
+        });
+      }
+
       continue;
     }
 
-    // Parse step completion: "✅ [agent:role] Done"
-    const doneMatch = line.match(/✅ \[([^\]]+)\] Done/);
-    if (doneMatch && currentStep) {
+    // Parse step completion: "[agent:role] Done (Xs)" or "✅ [agent:role] Done (Xs)"
+    const doneMatch = line.match(/(?:✅ )?\[([^\]]+)\] Done/);
+    if (doneMatch) {
       const label = doneMatch[1];
-      const idx = steps.findIndex((s) => s.title === label || `${s.agent}:${s.role}` === label || s.agent === label);
+      const idx = findStepIndex(steps, label);
       if (idx >= 0) {
         steps[idx].status = "done";
       }
-      currentStep = null;
       continue;
     }
 
-    // Parse step failure: "❌ [agent:role] Failed"
-    const failMatch = line.match(/❌ \[([^\]]+)\] Failed/);
-    if (failMatch && currentStep) {
+    // Parse step failure: "[agent:role] Failed" (with or without prefix)
+    const failMatch = line.match(/(?:❌ )?\[([^\]]+)\] Failed/);
+    if (failMatch) {
       const label = failMatch[1];
-      const idx = steps.findIndex((s) => s.title === label || `${s.agent}:${s.role}` === label || s.agent === label);
+      const idx = findStepIndex(steps, label);
       if (idx >= 0) {
         steps[idx].status = "failed";
       }
-      currentStep = null;
       continue;
     }
 
@@ -107,19 +120,21 @@ export function parseLogSteps(logContent: string): PipelineStep[] {
 }
 
 /**
- * Get a summary status from all steps
+ * Find a step by label, checking title, agent:role, and agent name.
+ * For ambiguous matches (e.g. two "developer:code" steps), prefer
+ * the one currently running, then the first pending one.
  */
-export function getPipelineStatus(steps: PipelineStep[]): "idle" | "running" | "done" | "failed" {
-  if (steps.length === 0) return "idle";
+function findStepIndex(steps: PipelineStep[], label: string): number {
+  // Exact title / agent:role / agent match — prefer running step
+  const running = steps.findIndex(
+    (s) =>
+      s.status === "running" &&
+      (s.title === label || `${s.agent}:${s.role}` === label || s.agent === label)
+  );
+  if (running >= 0) return running;
 
-  const hasRunning = steps.some((s) => s.status === "running");
-  if (hasRunning) return "running";
-
-  const hasFailed = steps.some((s) => s.status === "failed");
-  if (hasFailed) return "failed";
-
-  const allDone = steps.every((s) => s.status === "done");
-  if (allDone) return "done";
-
-  return "idle";
+  // Fallback: any matching step
+  return steps.findIndex(
+    (s) => s.title === label || `${s.agent}:${s.role}` === label || s.agent === label
+  );
 }

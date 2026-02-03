@@ -2,12 +2,15 @@ import { prisma } from "@/lib/prisma";
 import { NextResponse } from "next/server";
 import { detectStack, validateProjectPath } from "@/lib/stack-detector";
 import { DEFAULT_SETTINGS } from "@/types/settings";
+import { PROJECT_LIST_LIMIT } from "@/lib/constants";
 
 export const dynamic = "force-dynamic";
 
 export async function GET() {
   const projects = await prisma.project.findMany({
+    where: { deletedAt: null },
     orderBy: { updatedAt: "desc" },
+    take: PROJECT_LIST_LIMIT,
     include: {
       _count: { select: { conversations: true } },
     },

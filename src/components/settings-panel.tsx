@@ -5,11 +5,36 @@
 
 "use client";
 
-import { useState, useEffect } from "react";
+import { useCallback, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { useFetchJson } from "@/lib/hooks/use-fetch-json";
+import { useForm } from "@/lib/hooks/use-form";
 import type { ProjectSettings } from "@/types/settings";
 import { DEFAULT_SETTINGS } from "@/types/settings";
+import { apiFetch } from "@/lib/utils";
+
+interface AntigravityAccount {
+  id: string;
+  email: string;
+  source: string;
+  disabled: boolean;
+  rateLimitedUntil: string | null;
+  lastUsedAt: string | null;
+  createdAt: string;
+}
+
+interface AntigravityStats {
+  total: number;
+  available: number;
+  rateLimited: number;
+  disabled: number;
+}
+
+interface AntigravityData {
+  accounts: AntigravityAccount[];
+  stats: AntigravityStats;
+}
 
 interface SettingsPanelProps {
   projectId: string;
@@ -17,113 +42,304 @@ interface SettingsPanelProps {
 }
 
 export function SettingsPanel({ projectId, onClose }: SettingsPanelProps) {
-  const [settings, setSettings] = useState<ProjectSettings>(DEFAULT_SETTINGS);
-  const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
-  const [dirty, setDirty] = useState(false);
+  const { data: fetchedSettings, loading: fetchLoading } = useFetchJson<ProjectSettings>(
+    `/api/settings?projectId=${projectId}`,
+  );
 
-  useEffect(() => {
-    fetch(`/api/settings?projectId=${projectId}`)
-      .then((r) => r.json())
-      .then((settingsData) => {
-        if (settingsData) setSettings(settingsData);
-      })
-      .catch((err) => {
-        console.error("Failed to fetch settings:", err);
-      })
-      .finally(() => {
-        setLoading(false);
-      });
-  }, [projectId]);
+  const settings = fetchedSettings ?? DEFAULT_SETTINGS;
 
-  const handleSave = async () => {
-    setSaving(true);
-    try {
-      const res = await fetch("/api/settings", {
+  const form = useForm<Record<string, unknown>>(
+    {
+      budgetLimit: settings.budgetLimit,
+      debateEnabled: settings.debateEnabled,
+      debateAggressiveness: settings.debateAggressiveness ?? 0.5,
+    } as Record<string, unknown>,
+    useCallback(async (values: Record<string, unknown>) => {
+      const res = await apiFetch("/api/settings", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ projectId, settings }),
+        body: JSON.stringify({
+          projectId,
+          settings: {
+            ...settings,
+            budgetLimit: values.budgetLimit,
+            debateEnabled: values.debateEnabled,
+            debateAggressiveness: values.debateAggressiveness,
+          },
+        }),
       });
-
-      if (res.ok) {
-        setDirty(false);
-      } else {
-        throw new Error("Failed to save settings");
-      }
-    } catch (err) {
-      console.error("Failed to save settings:", err);
-      alert("Failed to save settings. Please try again.");
-    } finally {
-      setSaving(false);
-    }
-  };
+      if (!res.ok) throw new Error("Failed to save settings");
+    }, [projectId, settings]),
+  );
 
   const updateBudget = (budget: string) => {
     if (budget === "") {
-      setSettings((prev) => ({ ...prev, budgetLimit: undefined }));
-      setDirty(true);
+      form.setValue("budgetLimit", undefined);
       return;
     }
     const value = parseFloat(budget);
     if (!isNaN(value) && value >= 0) {
-      setSettings((prev) => ({ ...prev, budgetLimit: value }));
-      setDirty(true);
+      form.setValue("budgetLimit", value);
     }
   };
 
-  if (loading) {
+  // Antigravity accounts
+  const { data: agData, refetch: refetchAg } = useFetchJson<AntigravityData>("/api/antigravity");
+  const [agImporting, setAgImporting] = useState(false);
+
+  const handleImportOpenCode = async () => {
+    setAgImporting(true);
+    try {
+      await apiFetch("/api/antigravity", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "import" }),
+      });
+      await refetchAg();
+    } finally {
+      setAgImporting(false);
+    }
+  };
+
+  const handleToggleAccount = async (id: string, disabled: boolean) => {
+    await apiFetch("/api/antigravity", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "toggle", id, disabled }),
+    });
+    await refetchAg();
+  };
+
+  const handleRemoveAccount = async (id: string) => {
+    await apiFetch(`/api/antigravity?id=${id}`, { method: "DELETE" });
+    await refetchAg();
+  };
+
+  if (fetchLoading) {
     return (
-      <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-        <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-8">
-          <div className="animate-spin text-2xl">⟳</div>
+      <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 animate-fade-in">
+        <div className="glass-raised border border-border rounded-xl p-8 shadow-2xl">
+          <div className="h-8 w-8 animate-spin rounded-full border-2 border-brand border-t-transparent" />
         </div>
       </div>
     );
   }
 
   return (
-    <div className="fixed inset-0 bg-background/80 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-      <div className="bg-surface border border-border rounded-xl w-full max-w-lg max-h-[85vh] flex flex-col shadow-2xl animate-fade-in-scale">
+    <div className="fixed inset-0 bg-black/60 backdrop-blur-md flex items-center justify-center z-50 p-4 animate-fade-in">
+      <div className="glass-raised border border-border rounded-xl w-full max-w-lg shadow-2xl animate-fade-in-scale flex flex-col overflow-hidden">
         {/* Header */}
-        <div className="flex items-center justify-between p-4 border-b border-border shrink-0">
-          <h2 className="text-lg font-medium text-foreground">Project Settings</h2>
+        <div className="flex items-center justify-between p-5 border-b border-border-subtle shrink-0">
+          <div className="flex flex-col">
+            <h2 className="text-lg font-medium text-foreground">Project Settings</h2>
+            <p className="text-xs text-muted-foreground mt-0.5">Configure automated limits and behavior</p>
+          </div>
           <div className="flex items-center gap-2">
-            {dirty && <Badge variant="outline" className="text-xs border-destructive/50 text-destructive">Unsaved changes</Badge>}
-            <Button
-              onClick={handleSave}
-              disabled={!dirty || saving}
-              size="sm"
-              className="text-xs"
-            >
-              {saving ? "Saving..." : "Save"}
-            </Button>
-            <Button onClick={onClose} variant="ghost" size="sm" className="text-xs">
-              Close
+            {form.isDirty && (
+              <Badge variant="outline" className="text-[10px] border-warning/50 text-warning bg-warning-soft/20 animate-pulse">
+                Unsaved changes
+              </Badge>
+            )}
+            <Button onClick={onClose} variant="ghost" size="sm" className="h-8 w-8 p-0 rounded-full hover:bg-surface-raised">
+              ✕
             </Button>
           </div>
         </div>
 
         {/* Content */}
-        <div className="flex-1 overflow-y-auto min-h-0">
-          <div className="p-6 space-y-6">
-            {/* Budget Limit */}
-            <div>
-              <label className="text-sm font-medium text-foreground block mb-2">
-                Budget Limit (USD per pipeline)
-              </label>
+        <div className="p-6 space-y-6 bg-surface/30">
+          {/* Budget Limit */}
+          <div className="space-y-3">
+            <label className="text-sm font-medium text-foreground flex items-center gap-2">
+              <span>💰 Budget Limit</span>
+              <span className="text-xs font-normal text-muted-foreground">(USD per pipeline)</span>
+            </label>
+            <div className="relative">
+              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground text-sm">$</span>
               <input
                 type="number"
                 min="0"
                 step="0.01"
-                value={settings.budgetLimit ?? ""}
+                value={(form.values.budgetLimit as number | undefined) ?? ""}
                 onChange={(e) => updateBudget(e.target.value)}
-                className="bg-muted/50 border border-input rounded-md px-3 py-2 text-sm w-full focus:ring-1 focus:ring-ring outline-none"
+                className="bg-surface border border-border rounded-lg pl-7 pr-3 py-2.5 text-sm w-full focus:ring-2 focus:ring-brand/20 focus:border-brand outline-none transition-all placeholder:text-muted-foreground/30"
                 placeholder="No limit"
               />
-              <p className="text-xs text-muted-foreground mt-1.5">
-                Pipeline will stop if estimated cost exceeds this amount
+            </div>
+            <p className="text-[11px] text-muted-foreground/80 leading-relaxed bg-surface/50 p-3 rounded-lg border border-border-subtle">
+              The pipeline will automatically stop if the estimated cost exceeds this amount.
+              Draft runs and planning steps are not counted towards this limit.
+            </p>
+          </div>
+
+          {/* Agent Debates */}
+          <div className="space-y-3">
+            <label className="text-sm font-medium text-foreground flex items-center gap-2">
+              <span>Agent Debates</span>
+              <span className="text-xs font-normal text-muted-foreground">(opinion-driven disagreements)</span>
+            </label>
+            <div className="flex items-center gap-3">
+              <button
+                type="button"
+                onClick={() => {
+                  const newDebateEnabled = !(settings.debateEnabled !== false);
+                  form.setValue("debateEnabled", newDebateEnabled);
+                }}
+                className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
+                  (form.values.debateEnabled as boolean | undefined) !== false
+                    ? "bg-brand"
+                    : "bg-muted"
+                }`}
+              >
+                <span
+                  className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                    (form.values.debateEnabled as boolean | undefined) !== false
+                      ? "translate-x-6"
+                      : "translate-x-1"
+                  }`}
+                />
+              </button>
+              <span className="text-xs text-muted-foreground">
+                {(form.values.debateEnabled as boolean | undefined) !== false ? "Enabled" : "Disabled"}
+              </span>
+            </div>
+            {(form.values.debateEnabled as boolean | undefined) !== false && (
+              <div className="space-y-2 mt-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs text-muted-foreground">Aggressiveness</span>
+                  <span className="text-xs text-foreground font-mono">
+                    {((form.values.debateAggressiveness as number | undefined) ?? 0.5).toFixed(1)}
+                  </span>
+                </div>
+                <input
+                  type="range"
+                  min="0"
+                  max="1"
+                  step="0.1"
+                  value={(form.values.debateAggressiveness as number | undefined) ?? 0.5}
+                  onChange={(e) => form.setValue("debateAggressiveness", parseFloat(e.target.value))}
+                  className="w-full h-1.5 bg-surface rounded-lg appearance-none cursor-pointer accent-brand"
+                />
+                <div className="flex justify-between text-[10px] text-faint">
+                  <span>Polite</span>
+                  <span>Opinionated</span>
+                  <span>Confrontational</span>
+                </div>
+              </div>
+            )}
+            <p className="text-[11px] text-muted-foreground/80 leading-relaxed bg-surface/50 p-3 rounded-lg border border-border-subtle">
+              When enabled, agents will challenge each other&apos;s work when it conflicts with their opinions. Higher aggressiveness lowers the trigger threshold.
+            </p>
+          </div>
+
+          {/* Antigravity Accounts */}
+          <div className="space-y-3">
+            <label className="text-sm font-medium text-foreground flex items-center gap-2">
+              <span>Antigravity Accounts</span>
+              {agData?.stats && (
+                <span className="text-xs font-normal text-muted-foreground">
+                  ({agData.stats.available} available / {agData.stats.total} total)
+                </span>
+              )}
+            </label>
+
+            {/* Account List */}
+            {agData?.accounts && agData.accounts.length > 0 ? (
+              <div className="space-y-2">
+                {agData.accounts.map((acct) => {
+                  const isRateLimited = acct.rateLimitedUntil && new Date(acct.rateLimitedUntil) > new Date();
+                  return (
+                    <div
+                      key={acct.id}
+                      className="flex items-center justify-between bg-surface border border-border-subtle rounded-lg px-3 py-2"
+                    >
+                      <div className="flex items-center gap-2 min-w-0">
+                        <span
+                          className={`w-2 h-2 rounded-full shrink-0 ${
+                            acct.disabled ? "bg-muted-foreground/30" : isRateLimited ? "bg-warning" : "bg-emerald-500"
+                          }`}
+                        />
+                        <span className="text-sm text-foreground truncate">{acct.email}</span>
+                        <Badge variant="outline" className="text-[9px] shrink-0">
+                          {acct.source}
+                        </Badge>
+                      </div>
+                      <div className="flex items-center gap-1 shrink-0 ml-2">
+                        <Button
+                          onClick={() => handleToggleAccount(acct.id, !acct.disabled)}
+                          variant="ghost"
+                          size="sm"
+                          className="h-7 text-[10px] px-2"
+                        >
+                          {acct.disabled ? "Enable" : "Disable"}
+                        </Button>
+                        <Button
+                          onClick={() => handleRemoveAccount(acct.id)}
+                          variant="ghost"
+                          size="sm"
+                          className="h-7 text-[10px] px-2 text-destructive hover:text-destructive"
+                        >
+                          Remove
+                        </Button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            ) : (
+              <p className="text-[11px] text-muted-foreground/80 bg-surface/50 p-3 rounded-lg border border-border-subtle">
+                No Antigravity accounts connected. Connect a Google account or import from OpenCode to access free Gemini and Claude models.
               </p>
-            </div>          </div>
+            )}
+
+            {/* Actions */}
+            <div className="flex gap-2">
+              <Button
+                onClick={() => window.open("/api/antigravity/auth", "_self")}
+                variant="outline"
+                size="sm"
+                className="text-xs"
+              >
+                Connect Google Account
+              </Button>
+              <Button
+                onClick={handleImportOpenCode}
+                variant="outline"
+                size="sm"
+                className="text-xs"
+                disabled={agImporting}
+              >
+                {agImporting ? "Importing..." : "Import from OpenCode"}
+              </Button>
+            </div>
+          </div>
+        </div>
+
+        {/* Footer */}
+        <div className="p-4 border-t border-border-subtle bg-surface/50 flex justify-end gap-3">
+          <Button
+             onClick={onClose}
+             variant="ghost"
+             size="sm"
+             className="text-xs"
+          >
+            Cancel
+          </Button>
+          <Button
+            onClick={form.save}
+            disabled={!form.isDirty || form.isSaving}
+            size="sm"
+            className="text-xs shadow-md"
+          >
+            {form.isSaving ? (
+              <>
+                <span className="w-3 h-3 border-2 border-white/30 border-t-white rounded-full animate-spin mr-2" />
+                Saving...
+              </>
+            ) : (
+              "Save Changes"
+            )}
+          </Button>
         </div>
       </div>
     </div>

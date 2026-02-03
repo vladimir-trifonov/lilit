@@ -5,7 +5,7 @@
 
 import { prisma } from "./prisma";
 import { generateEmbedding } from "./embeddings";
-import { AGENT } from "@/lib/models";
+import { RAG_MEMORY_LIMIT, RAG_MIN_SIMILARITY } from "@/lib/constants";
 
 // --- Types ---
 
@@ -13,7 +13,7 @@ export interface MemoryInput {
   projectId: string;
   agent?: string;
   role?: string;
-  type: "code_pattern" | "decision" | "personality";
+  type: "code_pattern" | "decision" | "personality" | "debate";
   title: string;
   content: string;
   sourceType: "event_log" | "agent_run" | "manual" | "file_index";
@@ -70,7 +70,7 @@ export async function storeMemory(input: MemoryInput): Promise<string | null> {
 
   // Generate and store embedding (fire-and-forget pattern if desired by caller)
   const embedding = await generateEmbedding(`${input.title}\n${input.content}`);
-  if (embedding) {
+  if (embedding && embedding.every((v) => Number.isFinite(v))) {
     const vectorStr = `[${embedding.join(",")}]`;
     await prisma.$queryRawUnsafe(
       `UPDATE "Memory" SET "embedding" = $1::vector WHERE "id" = $2`,
@@ -105,14 +105,14 @@ export async function queryMemories(
     query,
     agent,
     types,
-    limit = 8,
-    minSimilarity = 0.3,
+    limit = RAG_MEMORY_LIMIT,
+    minSimilarity = RAG_MIN_SIMILARITY,
   } = opts;
 
   // Try vector search first
   const queryEmbedding = await generateEmbedding(query);
 
-  if (queryEmbedding) {
+  if (queryEmbedding && queryEmbedding.every((v) => Number.isFinite(v))) {
     const vectorStr = `[${queryEmbedding.join(",")}]`;
 
     // Build WHERE conditions
@@ -192,6 +192,7 @@ const TYPE_LABELS: Record<string, string> = {
   code_pattern: "Code Patterns",
   decision: "Past Decisions",
   personality: "Team Context",
+  debate: "Past Debates",
 };
 
 /**
@@ -220,15 +221,8 @@ export function formatMemoriesForPrompt(memories: MemoryRecord[]): string {
 
 /**
  * Get recommended memory types for a given agent/role combination.
+ * All agents get the full set of memory types including debate context.
  */
-export function getMemoryTypesForAgent(
-  agent: string,
-  role?: string
-): string[] {
-  if (agent === AGENT.PM) return ["decision", "code_pattern"];
-  if (agent === AGENT.ARCHITECT) return ["decision", "code_pattern"];
-  if (agent === AGENT.DEVELOPER && role === "review") return ["code_pattern", "decision"];
-  if (agent === AGENT.DEVELOPER) return ["code_pattern", "decision", "personality"];
-  if (agent === AGENT.QA) return ["code_pattern", "decision"];
-  return ["decision", "code_pattern"];
+export function getMemoryTypesForAgent(): string[] {
+  return ["decision", "code_pattern", "personality", "debate"];
 }

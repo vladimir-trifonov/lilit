@@ -6,6 +6,7 @@
 
 import { prisma } from "@/lib/prisma";
 import { NextResponse } from "next/server";
+import { COST_QUERY_LIMIT } from "@/lib/constants";
 
 export const dynamic = "force-dynamic";
 
@@ -87,6 +88,7 @@ export async function GET(req: Request) {
     const runs = await prisma.agentRun.findMany({
       where: { projectId: projectId! },
       orderBy: { createdAt: "desc" },
+      take: COST_QUERY_LIMIT,
     });
 
     const totalCost = runs.reduce((sum, run) => sum + (run.costUsd ?? 0), 0);

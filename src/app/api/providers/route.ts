@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { getAvailableProviders } from "@/lib/providers";
+import { getAvailableProviders } from "@/lib/providers/index";
 
 export const dynamic = "force-dynamic";
 

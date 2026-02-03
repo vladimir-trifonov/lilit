@@ -12,8 +12,17 @@ import fs from "fs";
 import path from "path";
 import os from "os";
 import { getPersonality } from "./personality";
+import { getAgent } from "./agent-loader";
 import type { VoiceProvider } from "@/types/settings";
-import { AGENT } from "@/lib/models";
+import {
+  TEMP_DIR_NAME,
+  VOICE_SUBDIR,
+  OPENAI_TTS_URL,
+  TTS_MODEL,
+  TTS_RESPONSE_FORMAT,
+  TTS_DEFAULT_SPEED,
+  WORDS_PER_MINUTE,
+} from "@/lib/constants";
 
 // ---- Types ----
 
@@ -31,21 +40,6 @@ export interface SynthesisResult {
   cached: boolean;
 }
 
-// ---- Voice ID mapping ----
-
-// Maps agent types to OpenAI TTS voices based on personality standup_voice hints.
-// These were chosen to match the personality profiles:
-//   Sasha (PM):        alloy    — warm, professional
-//   Marcus (Architect): onyx    — deep, deliberate
-//   Kai (Developer):    echo    — bright, energetic
-//   River (QA):         nova    — clear, precise
-const OPENAI_VOICE_MAP: Record<string, string> = {
-  [AGENT.PM]: "alloy",
-  [AGENT.ARCHITECT]: "onyx",
-  [AGENT.DEVELOPER]: "echo",
-  [AGENT.QA]: "nova",
-};
-
 const DEFAULT_OPENAI_VOICE = "alloy";
 
 // ---- Voice config resolution ----
@@ -53,11 +47,12 @@ const DEFAULT_OPENAI_VOICE = "alloy";
 export function getVoiceConfig(agentType: string, provider: VoiceProvider = "openai"): VoiceConfig {
   const personality = getPersonality(agentType);
   const sv = personality?.standup_voice;
+  const agentDef = getAgent(agentType);
 
   return {
     provider,
-    voiceId: OPENAI_VOICE_MAP[agentType] ?? DEFAULT_OPENAI_VOICE,
-    speed: sv?.speed ?? 1.0,
+    voiceId: agentDef?.ttsVoice ?? DEFAULT_OPENAI_VOICE,
+    speed: sv?.speed ?? TTS_DEFAULT_SPEED,
     pitch: sv?.pitch ?? "medium",
     accentHint: sv?.accent_hint ?? "neutral",
   };
@@ -66,7 +61,7 @@ export function getVoiceConfig(agentType: string, provider: VoiceProvider = "ope
 // ---- Audio file management ----
 
 function getVoiceDir(projectId: string): string {
-  const dir = path.join(os.tmpdir(), "lilit", projectId, "voice");
+  const dir = path.join(os.tmpdir(), TEMP_DIR_NAME, projectId, VOICE_SUBDIR);
   fs.mkdirSync(dir, { recursive: true });
   return dir;
 }
@@ -129,18 +124,18 @@ async function synthesizeOpenAI(opts: {
   const config = getVoiceConfig(opts.agentType, "openai");
   const filePath = getAudioPath(opts.projectId, opts.messageId);
 
-  const response = await fetch("https://api.openai.com/v1/audio/speech", {
+  const response = await fetch(OPENAI_TTS_URL, {
     method: "POST",
     headers: {
       "Authorization": `Bearer ${apiKey}`,
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
-      model: "tts-1",
+      model: TTS_MODEL,
       input: opts.text,
       voice: config.voiceId,
       speed: config.speed,
-      response_format: "mp3",
+      response_format: TTS_RESPONSE_FORMAT,
     }),
   });
 
@@ -164,7 +159,7 @@ async function synthesizeOpenAI(opts: {
 /** Rough duration estimate: ~150 words per minute at speed 1.0 */
 function estimateDuration(text: string, speed = 1.0): number {
   const words = text.split(/\s+/).length;
-  const minutes = words / 150 / speed;
+  const minutes = words / WORDS_PER_MINUTE / speed;
   return Math.round(minutes * 60 * 1000);
 }
 

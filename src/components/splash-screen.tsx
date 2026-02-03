@@ -1,13 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback, useRef } from "react";
-
-const AGENTS = [
-  { name: "Sasha", role: "PM" },
-  { name: "Marcus", role: "Architect" },
-  { name: "Kai", role: "Developer" },
-  { name: "River", role: "QA" },
-];
+import { apiFetch } from "@/lib/utils";
 
 const PARTICLES = Array.from({ length: 12 }, (_, i) => ({
   left: `${8 + ((i * 7 + 13) % 84)}%`,
@@ -21,10 +15,25 @@ export function SplashScreen({ onComplete }: { onComplete: () => void }) {
   const [exiting, setExiting] = useState(false);
   const [videoSrc, setVideoSrc] = useState<string | null>(null);
   const [videoReady, setVideoReady] = useState(false);
+  const [agents, setAgents] = useState<{ name: string; role: string }[]>([]);
   const videoRef = useRef<HTMLVideoElement>(null);
 
   useEffect(() => {
-    fetch("/api/splash-videos")
+    apiFetch("/api/agents")
+      .then((r) => r.json())
+      .then((data: { agents: Record<string, { name: string; type: string; personality?: { codename?: string } }> }) => {
+        setAgents(
+          Object.values(data.agents).map((a) => ({
+            name: a.personality?.codename ?? a.name,
+            role: a.name,
+          }))
+        );
+      })
+      .catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    apiFetch("/api/splash-videos")
       .then((r) => r.json())
       .then((data: { videos: string[] }) => {
         if (data.videos.length > 0) {
@@ -56,17 +65,17 @@ export function SplashScreen({ onComplete }: { onComplete: () => void }) {
 
   return (
     <div
-      className={`fixed inset-0 z-50 flex flex-col items-center justify-center bg-black overflow-hidden transition-opacity duration-800 ease-out ${
+      className={`fixed inset-0 z-50 flex flex-col items-center justify-center bg-background overflow-hidden transition-opacity duration-800 ease-out ${
         exiting ? "opacity-0 pointer-events-none" : "opacity-100"
       }`}
     >
       {/* Breathing ambient glow */}
       <div
-        className="pointer-events-none absolute top-[40%] left-1/2 h-[500px] w-[800px] rounded-full bg-indigo-500/[0.06]"
+        className="pointer-events-none absolute top-[40%] left-1/2 h-[500px] w-[800px] rounded-full bg-brand/5"
         style={{ filter: "blur(140px)", animation: "splash-glow-breathe 6s ease-in-out infinite" }}
       />
       <div
-        className="pointer-events-none absolute top-[48%] left-1/2 h-[300px] w-[500px] rounded-full bg-purple-500/[0.05]"
+        className="pointer-events-none absolute top-[48%] left-1/2 h-[300px] w-[500px] rounded-full bg-accent/5"
         style={{ filter: "blur(100px)", animation: "splash-glow-breathe 8s ease-in-out infinite 1s" }}
       />
 
@@ -74,7 +83,7 @@ export function SplashScreen({ onComplete }: { onComplete: () => void }) {
       {PARTICLES.map((p, i) => (
         <div
           key={i}
-          className="pointer-events-none absolute bottom-0 rounded-full bg-white/[0.15]"
+          className="pointer-events-none absolute bottom-0 rounded-full bg-white/10"
           style={{
             left: p.left,
             width: p.size,
@@ -91,8 +100,8 @@ export function SplashScreen({ onComplete }: { onComplete: () => void }) {
           started ? (videoReady ? "opacity-100" : "opacity-0") : "opacity-0 h-0 overflow-hidden"
         }`}
       >
-        <div className="absolute -inset-1.5 rounded-2xl bg-gradient-to-r from-indigo-500/20 via-purple-500/15 to-indigo-500/20 blur-md" />
-        <div className="absolute -inset-px rounded-2xl bg-gradient-to-b from-white/[0.08] to-transparent" />
+        <div className="absolute -inset-1.5 rounded-2xl bg-gradient-to-r from-brand/20 via-accent/15 to-brand/20 blur-md" />
+        <div className="absolute -inset-px rounded-2xl bg-gradient-to-b from-white/10 to-transparent" />
 
         {videoSrc && (
           <video
@@ -102,7 +111,7 @@ export function SplashScreen({ onComplete }: { onComplete: () => void }) {
             playsInline
             onCanPlay={() => setVideoReady(true)}
             onEnded={handleVideoEnd}
-            className="relative max-h-[60vh] max-w-[80vw] rounded-2xl object-contain shadow-2xl shadow-indigo-500/10"
+            className="relative max-h-[60vh] max-w-[80vw] rounded-2xl object-contain shadow-2xl shadow-brand/10"
           />
         )}
       </div>
@@ -139,13 +148,13 @@ export function SplashScreen({ onComplete }: { onComplete: () => void }) {
             className="mt-10 flex items-center gap-6 opacity-0 animate-fade-in"
             style={{ animationDelay: "800ms" }}
           >
-            {AGENTS.map((agent, i) => (
+            {agents.map((agent, i) => (
               <div
                 key={agent.name}
                 className="flex flex-col items-center gap-1 opacity-0 animate-fade-in-up"
                 style={{ animationDelay: `${900 + i * 150}ms` }}
               >
-                <div className="h-8 w-8 rounded-full border border-white/10 bg-white/[0.03] flex items-center justify-center">
+                <div className="h-8 w-8 rounded-full border border-white/10 bg-white/5 flex items-center justify-center">
                   <span className="text-xs font-semibold text-white/40">
                     {agent.name[0]}
                   </span>
@@ -162,10 +171,10 @@ export function SplashScreen({ onComplete }: { onComplete: () => void }) {
           >
             <div className="relative" style={{ animation: "splash-float 3s ease-in-out infinite" }}>
               <div
-                className="absolute inset-0 rounded-full border border-indigo-400/30"
+                className="absolute inset-0 rounded-full border border-brand/30"
                 style={{ animation: "splash-pulse-ring 2.5s ease-out infinite" }}
               />
-              <div className="h-14 w-14 rounded-full border border-white/20 bg-white/[0.03] backdrop-blur-sm flex items-center justify-center transition-all hover:border-white/40 hover:bg-white/[0.08] hover:scale-105">
+              <div className="h-14 w-14 rounded-full border border-white/20 bg-white/5 backdrop-blur-sm flex items-center justify-center transition-all hover:border-white/40 hover:bg-white/10 hover:scale-105">
                 <svg viewBox="0 0 24 24" fill="currentColor" className="h-5 w-5 text-white/70 ml-0.5">
                   <path d="M8 5v14l11-7z" />
                 </svg>

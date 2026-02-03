@@ -213,6 +213,34 @@ Skipped:  bg-muted/50 border-border-subtle text-faint
 
 ---
 
+## ElevenLabs UI Components
+
+The project uses select components from [ElevenLabs UI](https://ui.elevenlabs.io) (`@elevenlabs/ui`) for animated, agent-aware UI elements. Components are installed individually via the CLI and land in `src/components/ui/`.
+
+### Available Components
+
+| Component | Use Case | Dependency |
+|-----------|----------|------------|
+| **ShimmeringText** | Loading/thinking indicators, emphasis text | `motion` |
+| **Orb** | Agent visualization, 3D presence indicator | `three`, `@react-three/fiber`, `@react-three/drei` |
+| **BarVisualizer** | Audio-reactive frequency bars, agent state viz | None (Web Audio API) |
+| **Response** | Streaming markdown with character animation | `streamdown` |
+
+### Installation
+
+```bash
+npx @elevenlabs/cli@latest components add <component-name>
+```
+
+### Usage Guidelines
+
+- **ShimmeringText**: Use for loading states and emphasis. Brand-aligned with `shimmerColor="oklch(0.55 0.20 270)"`.
+- **Orb**: Reserved for agent presence in the Agents panel. Heavy (WebGL) -- do not use inline in chat.
+- **BarVisualizer**: Use in demo mode (`demo={true}`) for pipeline activity. Supports `state` prop: `"thinking"`, `"listening"`, `"speaking"`.
+- **Response**: Use for streaming AI output in chat messages when streaming support is added.
+
+---
+
 ## Gradient Usage
 
 Gradients are reserved for emphasis moments, not structural elements:

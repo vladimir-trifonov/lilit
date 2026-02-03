@@ -4,10 +4,15 @@
  * Gracefully degrades — returns null when Ollama is unavailable.
  */
 
-const OLLAMA_BASE_URL = process.env.OLLAMA_BASE_URL || "http://localhost:11434";
-const EMBED_MODEL = "nomic-embed-text";
-const EMBED_TIMEOUT_MS = 10_000;
-const PULL_TIMEOUT_MS = 300_000; // 5 min
+import {
+  DEFAULT_OLLAMA_URL,
+  EMBED_MODEL,
+  EMBEDDING_TIMEOUT_MS,
+  MODEL_PULL_TIMEOUT_MS,
+  OLLAMA_HEALTH_CHECK_TIMEOUT_MS,
+} from "@/lib/constants";
+
+const OLLAMA_BASE_URL = process.env.OLLAMA_BASE_URL || DEFAULT_OLLAMA_URL;
 
 let modelReady: boolean | null = null;
 
@@ -20,7 +25,7 @@ async function ensureModel(): Promise<boolean> {
 
   try {
     const res = await fetch(`${OLLAMA_BASE_URL}/api/tags`, {
-      signal: AbortSignal.timeout(5000),
+      signal: AbortSignal.timeout(OLLAMA_HEALTH_CHECK_TIMEOUT_MS),
     });
     if (!res.ok) {
       modelReady = false;
@@ -39,7 +44,7 @@ async function ensureModel(): Promise<boolean> {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name: EMBED_MODEL }),
-        signal: AbortSignal.timeout(PULL_TIMEOUT_MS),
+        signal: AbortSignal.timeout(MODEL_PULL_TIMEOUT_MS),
       });
       if (!pullRes.ok) {
         modelReady = false;
@@ -76,7 +81,7 @@ export async function generateEmbedding(text: string): Promise<number[] | null> 
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ model: EMBED_MODEL, input: text }),
-      signal: AbortSignal.timeout(EMBED_TIMEOUT_MS),
+      signal: AbortSignal.timeout(EMBEDDING_TIMEOUT_MS),
     });
 
     if (!res.ok) return null;
@@ -114,3 +119,4 @@ export async function isEmbeddingServiceAvailable(): Promise<boolean> {
 export function resetEmbeddingCache(): void {
   modelReady = null;
 }
+

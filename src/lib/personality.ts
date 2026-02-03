@@ -4,13 +4,31 @@
  */
 
 import { prisma } from "./prisma";
+import { clamp } from "./utils";
+import { AGENT } from "@/lib/models";
 import {
   getAgent,
   getAgentRegistry,
   type ParsedPersonality,
   type PersonalityOverlay,
 } from "./agent-loader";
-import { AGENT } from "@/lib/models";
+import { queryMemories, formatMemoriesForPrompt } from "./memory";
+import {
+  PERSONALITY_INITIAL_TRUST,
+  PERSONALITY_INITIAL_TENSION,
+  PERSONALITY_INITIAL_RAPPORT,
+  TRUST_BOOST_CLEAN_REVIEW,
+  RAPPORT_BOOST_CLEAN_REVIEW,
+  TRUST_DROP_REJECTED_REVIEW,
+  TENSION_RISE_REJECTED_REVIEW,
+  TRUST_BOOST_SUCCESSFUL_FIX,
+  RAPPORT_BOOST_SUCCESSFUL_FIX,
+  TENSION_DECAY_SMOOTH_PIPELINE,
+  RAPPORT_BOOST_COLLABORATION,
+  TENSION_DISPLAY_THRESHOLD,
+  SCORE_HIGH_THRESHOLD,
+  SCORE_NEUTRAL_THRESHOLD,
+} from "@/lib/constants";
 
 // --- Personality Access ---
 
@@ -28,18 +46,28 @@ export function getPersonalityOverlay(
   return agent?.roles[role]?.personalityOverlay ?? null;
 }
 
+/** Resolve agent type to display codename (falls back to agent type). */
+export function getCodename(agentType: string): string {
+  const personality = getPersonality(agentType);
+  return personality?.codename ?? agentType;
+}
+
 // --- Relationship Management ---
 
-const AGENT_TYPES = [AGENT.PM, AGENT.ARCHITECT, AGENT.DEVELOPER, AGENT.QA];
+/** Dynamically derive agent types from the registry instead of hardcoding. */
+function getAgentTypes(): string[] {
+  return Object.keys(getAgentRegistry());
+}
 
 /**
  * Seed all 12 directional relationship rows for a project.
  * Safe to call multiple times — upserts on the unique constraint.
  */
 export async function initializeRelationships(projectId: string): Promise<void> {
+  const agentTypes = getAgentTypes();
   const pairs: Array<{ from: string; to: string }> = [];
-  for (const from of AGENT_TYPES) {
-    for (const to of AGENT_TYPES) {
+  for (const from of agentTypes) {
+    for (const to of agentTypes) {
       if (from !== to) pairs.push({ from, to });
     }
   }
@@ -58,19 +86,16 @@ export async function initializeRelationships(projectId: string): Promise<void> 
         projectId,
         fromAgent: pair.from,
         toAgent: pair.to,
-        trust: 0.5,
-        tension: 0.0,
-        rapport: 0.5,
+        trust: PERSONALITY_INITIAL_TRUST,
+        tension: PERSONALITY_INITIAL_TENSION,
+        rapport: PERSONALITY_INITIAL_RAPPORT,
       },
     });
   }
 }
 
-function clamp(value: number, min: number, max: number): number {
-  return Math.max(min, Math.min(max, value));
-}
 
-interface StepInfo {
+interface PipelineStepRef {
   agent: string;
   role?: string;
 }
@@ -81,13 +106,35 @@ interface StepResultInfo {
 }
 
 /**
+ * Find the most recent non-evaluator step before the given index.
+ * This is the "producer" whose work the current evaluator is reviewing.
+ */
+function findProducerAgent(
+  pipelineSteps: PipelineStepRef[],
+  beforeIndex: number
+): string | null {
+  for (let j = beforeIndex - 1; j >= 0; j--) {
+    const prev = pipelineSteps[j];
+    const prevDef = getAgent(prev.agent);
+    const prevRoleDef = prev.role ? prevDef?.roles[prev.role] : undefined;
+    if (!prevRoleDef?.evaluatesOutput) {
+      return prev.agent;
+    }
+  }
+  return null;
+}
+
+/**
  * Update relationships after a pipeline step completes.
- * Applies trust/tension/rapport adjustments based on step outcome.
+ * Uses frontmatter flags (evaluatesOutput, producesPassFail) instead of
+ * hardcoded agent checks, so any agent can participate in the evaluator/producer pattern.
  */
 export async function updateRelationships(
   projectId: string,
-  step: StepInfo,
-  result: StepResultInfo
+  step: PipelineStepRef,
+  result: StepResultInfo,
+  pipelineSteps?: PipelineStepRef[],
+  stepIndex?: number
 ): Promise<void> {
   const relationships = await prisma.agentRelationship.findMany({
     where: { projectId },
@@ -107,79 +154,53 @@ export async function updateRelationships(
   const findRel = (from: string, to: string) =>
     relationships.find((r) => r.fromAgent === from && r.toAgent === to);
 
-  // Review outcomes
-  if (step.role === "review") {
-    const approved = result.output.includes('"approved": true') ||
-      result.output.includes('"approved":true');
-    const rejected = result.output.includes('"approved": false') ||
-      result.output.includes('"approved":false');
+  const agentDef = getAgent(step.agent);
+  const roleDef = step.role ? agentDef?.roles[step.role] : undefined;
 
-    if (approved) {
-      // Reviewer trusts developer more
-      const rel = findRel(step.agent, AGENT.DEVELOPER);
-      if (rel) {
-        updates.push({
-          fromAgent: step.agent,
-          toAgent: AGENT.DEVELOPER,
-          trust: clamp(rel.trust + 0.05, 0, 1),
-          rapport: clamp(rel.rapport + 0.01, 0, 1),
-          lastNote: "Clean review — no issues",
-        });
-      }
-    } else if (rejected) {
-      const rel = findRel(step.agent, AGENT.DEVELOPER);
-      if (rel) {
-        updates.push({
-          fromAgent: step.agent,
-          toAgent: AGENT.DEVELOPER,
-          trust: clamp(rel.trust - 0.08, 0, 1),
-          tension: clamp(rel.tension + 0.10, 0, 1),
-          lastNote: "Review rejected — issues found",
-        });
+  // Evaluator/producer pattern: if this role evaluates output, find the producer
+  if (roleDef?.evaluatesOutput && pipelineSteps && stepIndex !== undefined) {
+    const producerAgent = findProducerAgent(pipelineSteps, stepIndex);
+    if (producerAgent) {
+      const passed = result.success && !result.output.includes('"passed": false') &&
+        !result.output.includes('"approved": false') && !result.output.includes('"approved":false');
+
+      if (passed) {
+        const rel = findRel(step.agent, producerAgent);
+        if (rel) {
+          updates.push({
+            fromAgent: step.agent,
+            toAgent: producerAgent,
+            trust: clamp(rel.trust + TRUST_BOOST_CLEAN_REVIEW, 0, 1),
+            rapport: clamp(rel.rapport + RAPPORT_BOOST_CLEAN_REVIEW, 0, 1),
+            lastNote: "Evaluation passed — no issues",
+          });
+        }
+      } else {
+        const rel = findRel(step.agent, producerAgent);
+        if (rel) {
+          updates.push({
+            fromAgent: step.agent,
+            toAgent: producerAgent,
+            trust: clamp(rel.trust - TRUST_DROP_REJECTED_REVIEW, 0, 1),
+            tension: clamp(rel.tension + TENSION_RISE_REJECTED_REVIEW, 0, 1),
+            lastNote: "Evaluation failed — issues found",
+          });
+        }
       }
     }
   }
 
-  // QA outcomes
-  if (step.agent === AGENT.QA) {
-    if (result.success && !result.output.includes('"passed": false')) {
-      const rel = findRel(AGENT.QA, AGENT.DEVELOPER);
-      if (rel) {
-        updates.push({
-          fromAgent: AGENT.QA,
-          toAgent: AGENT.DEVELOPER,
-          trust: clamp(rel.trust + 0.05, 0, 1),
-          rapport: clamp(rel.rapport + 0.01, 0, 1),
-          lastNote: "All tests passing",
-        });
-      }
-    } else {
-      const rel = findRel(AGENT.QA, AGENT.DEVELOPER);
-      if (rel) {
-        updates.push({
-          fromAgent: AGENT.QA,
-          toAgent: AGENT.DEVELOPER,
-          trust: clamp(rel.trust - 0.05, 0, 1),
-          tension: clamp(rel.tension + 0.08, 0, 1),
-          lastNote: "Test failures detected",
-        });
-      }
-    }
-  }
-
-  // Fix outcomes
-  if (step.role === "fix") {
-    if (result.success) {
-      const rel = findRel(AGENT.PM, AGENT.DEVELOPER);
-      if (rel) {
-        updates.push({
-          fromAgent: AGENT.PM,
-          toAgent: AGENT.DEVELOPER,
-          trust: clamp(rel.trust + 0.03, 0, 1),
-          rapport: clamp(rel.rapport + 0.01, 0, 1),
-          lastNote: "Fix applied successfully",
-        });
-      }
+  // Fix outcomes — PM trusts the fixer (PM is architecturally required)
+  if (step.role === "fix" && result.success) {
+    const rel = findRel(AGENT.PM, step.agent);
+    if (rel) {
+      updates.push({
+        fromAgent: AGENT.PM,
+        toAgent: step.agent,
+        trust: clamp(rel.trust + TRUST_BOOST_SUCCESSFUL_FIX, 0, 1),
+        rapport: clamp(rel.rapport + RAPPORT_BOOST_SUCCESSFUL_FIX, 0, 1),
+        lastNote: "Fix applied successfully",
+      });
     }
   }
 
@@ -194,7 +215,7 @@ export async function updateRelationships(
           updates.push({
             fromAgent: rel.fromAgent,
             toAgent: rel.toAgent,
-            tension: clamp(rel.tension - 0.02, 0, 1),
+            tension: clamp(rel.tension - TENSION_DECAY_SMOOTH_PIPELINE, 0, 1),
           });
         }
       }
@@ -202,7 +223,8 @@ export async function updateRelationships(
   }
 
   // Working together — slight rapport boost
-  for (const agentType of AGENT_TYPES) {
+  const allTypes = getAgentTypes();
+  for (const agentType of allTypes) {
     if (agentType !== step.agent) {
       const rel = findRel(step.agent, agentType);
       if (rel) {
@@ -213,7 +235,7 @@ export async function updateRelationships(
           updates.push({
             fromAgent: step.agent,
             toAgent: agentType,
-            rapport: clamp(rel.rapport + 0.01, 0, 1),
+            rapport: clamp(rel.rapport + RAPPORT_BOOST_COLLABORATION, 0, 1),
           });
         }
       }
@@ -244,8 +266,8 @@ export async function updateRelationships(
 // --- Relationship Context ---
 
 function describeScore(value: number, labels: [string, string, string]): string {
-  if (value >= 0.7) return labels[2]; // high
-  if (value >= 0.4) return labels[1]; // neutral
+  if (value >= SCORE_HIGH_THRESHOLD) return labels[2]; // high
+  if (value >= SCORE_NEUTRAL_THRESHOLD) return labels[1]; // neutral
   return labels[0]; // low
 }
 
@@ -268,7 +290,7 @@ export async function getRelationshipContext(
     const name = targetPersonality?.codename ?? rel.toAgent;
 
     const trustLabel = describeScore(rel.trust, ["low trust", "neutral", "high trust"]);
-    const tensionLabel = rel.tension > 0.3
+    const tensionLabel = rel.tension > TENSION_DISPLAY_THRESHOLD
       ? `tension (${rel.lastNote ?? "recent friction"})`
       : "";
     const rapportLabel = describeScore(rel.rapport, ["cold", "neutral", "warm rapport"]);
@@ -342,15 +364,45 @@ export async function buildPersonalityInjection(opts: {
     lines.push(opts.memoryContext);
   }
 
-  // Rules
+  // Past debates from RAG
+  try {
+    const debateMemories = await queryMemories({
+      projectId: opts.projectId,
+      query: `${opts.agentType} debate disagreement`,
+      agent: opts.agentType,
+      types: ["debate"],
+      limit: 3,
+    });
+    if (debateMemories.length > 0) {
+      lines.push("");
+      lines.push("## Past Debates");
+      lines.push("You have had these disagreements with teammates before:");
+      lines.push(formatMemoriesForPrompt(debateMemories));
+    }
+  } catch {
+    // Non-fatal
+  }
+
+  // Rules — confrontational but professional
   lines.push("");
   lines.push("## Personality Rules");
   lines.push(
-    "- Stay in character but never let personality override technical accuracy."
+    "- When you see work that violates your strong opinions, SAY SO. Silence implies agreement."
   );
-  lines.push("- Reference memories naturally, not as a list.");
   lines.push(
-    "- Keep personality subtle — it flavors your output, it does not dominate it."
+    "- If challenged, defend your position with specifics or concede gracefully."
+  );
+  lines.push(
+    "- Past debate outcomes matter — if you lost a similar argument before, acknowledge it."
+  );
+  lines.push(
+    "- Your opinions are not decoration — they should drive your technical decisions."
+  );
+  lines.push(
+    "- Stay professional but do not hold back."
+  );
+  lines.push(
+    "- Never let personality override technical accuracy."
   );
 
   return lines.join("\n");

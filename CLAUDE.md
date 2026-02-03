@@ -12,6 +12,7 @@ Lilit is an AI-powered software development team orchestration platform. Users d
 - **Styling**: Tailwind CSS 4, Shadcn UI components (in `src/components/ui/`)
 - **Database**: PostgreSQL 17 via Prisma 7 with `@prisma/adapter-pg` (PrismaPg driver adapter)
 - **AI Providers**: Anthropic Claude (via Claude Code CLI) and Google Gemini (via `@ai-sdk/google` + Vercel AI SDK)
+- **UI Components**: ElevenLabs UI (`@elevenlabs/ui`) -- animated components for agent/audio UIs (ShimmeringText, Orb, BarVisualizer, Response)
 - **Runtime**: Node.js 22 (Docker), Bun-compatible (`bunx tsx` for worker spawn)
 - **Package Manager**: npm (lockfile is `package-lock.json`)
 
@@ -193,6 +194,8 @@ Key relationships:
 | `DEFAULT_BUDGET_LIMIT` | No | Default budget per pipeline run in USD (default: `10.0`) |
 | `PRICING_{MODEL}_INPUT` | No | Override input token pricing for a model |
 | `PRICING_{MODEL}_OUTPUT` | No | Override output token pricing for a model |
+| `AUTH_SECRET` | No | Shared secret for API auth. When set, all `/api/` routes require `Authorization: Bearer <secret>` |
+| `TOKEN_ENCRYPTION_KEY` | No | 64 hex char (32-byte) key for AES-256-GCM encryption of OAuth tokens at rest |
 
 ## Coding Conventions
 
@@ -208,6 +211,115 @@ Key relationships:
 - **JSX entities**: Use HTML entities (`&ldquo;`, `&rdquo;`, `&quot;`) instead of literal quotes in JSX text content.
 - **Error handling**: Use empty `catch {}` blocks only for truly ignorable filesystem operations. API routes should return proper error responses.
 - **Settings**: Stored as JSON string in `Project.settings` column. Parsed via `parseSettings()` from `@/types/settings`.
+- **No magic numbers or strings**: All numeric constants (timeouts, limits, thresholds, scores) and string constants (file paths, URLs, directory names) must be defined in `src/lib/constants.ts` with descriptive names. Import from `@/lib/constants` rather than using inline literals. Exceptions: `0`, `1`, `-1` in trivial comparisons/indices, HTTP status codes in API route responses, and values already centralized in `models.ts` or domain-specific lookup tables.
+- **No hardcoded model names in adapters**: Provider adapters must not duplicate model names in local lookup tables or mappings. Model lists live in `@/lib/models` (single source of truth). Adapters should derive API-specific model IDs programmatically (e.g. stripping a prefix) rather than maintaining a parallel map. Pricing in `cost-calculator.ts` must gracefully handle unknown models (return zero), so adding a new model to `models.ts` is the only required change.
+- **API route request body parsing**: Always wrap `await req.json()` in a try/catch block and return a 400 response on parse failure. Never let malformed JSON propagate as an unhandled exception.
+- **DB query pagination**: Every `findMany` call must include a `take` limit. Use constants from `@/lib/constants` (`PROJECT_LIST_LIMIT`, `COST_QUERY_LIMIT`, etc.). Unbounded queries exhaust memory over time.
+- **Input validation before filesystem ops**: User-supplied IDs used in file paths (e.g. `projectId`) must be validated with a strict regex (`/^[a-zA-Z0-9_-]+$/`) before any `path.join`, `fs.readFileSync`, or `fs.writeFileSync`. Use `getProjectDir()` from `@/lib/claude-code` which includes this validation.
+- **No shell exec with user-derived values**: Use `process.kill(pid)` instead of `execSync("kill ...")`. Validate PIDs as integers. Never interpolate user input into shell commands.
+- **Raw SQL safety**: When using `$queryRawUnsafe`, always use positional parameters (`$1`, `$2`). Validate inputs before constructing query strings -- e.g. check `Number.isFinite()` on all embedding values before building vector strings.
+- **Child process output**: Truncate stderr output from worker processes before logging to prevent sensitive data (API keys, tokens) from appearing in server logs. Use `WORKER_STDERR_MAX_LENGTH` from constants.
+
+### Shared Utilities (use these, don't re-implement)
+
+| Utility | Location | Use for |
+|---------|----------|---------|
+| `extractJSON(raw)` | `@/lib/utils` | Parsing JSON from LLM output (3-stage: direct parse, code fence, find object/array) |
+| `clamp(value, min, max)` | `@/lib/utils` | Bounding numeric values |
+| `apiFetch(path, opts)` | `@/lib/utils` | Client-side API calls (attaches AUTH_SECRET bearer token) |
+| `authHeaders()` | `@/lib/utils` | Server-side auth header construction |
+| `getCodename(agentType)` | `@/lib/personality` | Resolving agent type to display codename (falls back to agent type) |
+| `stepLabel(step)` | `@/lib/orchestrator` | Formatting `agent:role` or `agent` labels for pipeline steps |
+| `getProjectDir(projectId)` | `@/lib/claude-code` | Getting validated project temp directory path |
+| `PlaybackButton` | `@/components/playback-button` | Voice playback toggle button (used in standup and agent message threads) |
+
+### Types (canonical sources, don't redefine)
+
+| Type | Location | Notes |
+|------|----------|-------|
+| `StepInfo` | `@/types/pipeline` | Canonical pipeline step info. Extend with `interface MyStepInfo extends StepInfo { ... }` if you need extra fields (e.g. required `output`). |
+| `PipelineStep` | `@/types/pipeline` | Pipeline step with status enum |
+| `ProjectSettings` | `@/types/settings` | Full project settings shape |
+
+### React Patterns
+
+- **Always check `res.ok`** on fetch responses before updating component state. `fetch` only rejects on network failure -- 4xx/5xx are successful responses that must be handled explicitly.
+- **Sync state from props**: When a component takes an `initialX` prop and manages local state, add a `useEffect` to sync when the prop changes. Otherwise UI drifts from server state.
+- **Stable keys**: Use domain-meaningful keys (e.g. `\`${theme}-${insightType}\``) in `.map()` calls, not array indices. Index keys cause unnecessary remounts when items reorder.
+
+## Design System
+
+Full reference: `docs/DESIGN-SYSTEM.md`. Key rules for writing UI code:
+
+### Color Tokens (OKLCH)
+
+Use CSS custom properties -- never hardcode Tailwind color classes like `zinc-*`, `yellow-*`, `amber-*`, `green-*`.
+
+| Token | Usage |
+|-------|-------|
+| `--brand` / `--brand-soft` / `--brand-muted` | Primary interactive, focus rings, active states |
+| `--accent` / `--accent-soft` | Secondary emphasis, gradient endpoints |
+| `--background` | App canvas (near-black, faint blue undertone) |
+| `--surface` | Cards, panels, elevated surfaces |
+| `--surface-raised` | Modals, popovers, dropdowns |
+| `--sidebar` | Sidebar background |
+| `--border` / `--border-subtle` | Borders and dividers |
+| `--foreground` / `--muted-foreground` / `--faint` | Primary / secondary / tertiary text |
+| `--success` / `--warning` / `--destructive` / `--info` | Status colors (each has a `-soft` variant at ~12% opacity for backgrounds) |
+
+**Agent identity colors** (for avatars, activity indicators, standup attribution):
+- PM (Sasha): `oklch(0.65 0.15 270)` -- indigo
+- Architect (Marcus): `oklch(0.60 0.12 200)` -- sky blue
+- Developer (Kai): `oklch(0.65 0.18 155)` -- emerald
+- QA (River): `oklch(0.65 0.15 45)` -- amber
+
+### Glass Material (Liquid Glass)
+
+Three Tailwind utilities defined in `globals.css`:
+
+| Utility | Where to use |
+|---------|-------------|
+| `glass-subtle` | Sidebar, header bar |
+| `glass` | Cards, panels, log sections |
+| `glass-raised` | Modals, settings panel, agent panel |
+
+**Do not** apply glass to badges, chips, or buttons. Max 3 glass surfaces visible simultaneously. Never animate an element with `backdrop-filter` directly.
+
+### Surface Hierarchy
+
+```
+Level 0: --background     (chat scroll area, main canvas)
+Level 1: glass-subtle/glass (sidebar, header, cards, panels)
+Level 2: glass-raised      (modals, popovers -- use shadow-2xl shadow-black/20 + backdrop-blur-sm overlay)
+```
+
+### Component Patterns
+
+- **Cards**: `glass border border-border-subtle rounded-xl p-4`
+- **Modals**: `glass-raised border border-border rounded-xl shadow-2xl shadow-black/20 backdrop-blur-sm`
+- **Badges**: `rounded-full px-2.5 py-0.5 text-[11px] font-medium tracking-wide` with `bg-{status}-soft text-{status}`
+- **Buttons**: Primary `bg-brand text-white hover:bg-brand/90`, Secondary `bg-surface border border-border`, Ghost `text-muted-foreground hover:text-foreground hover:bg-muted`
+- **Inputs**: `bg-surface border border-border rounded-lg focus:border-brand focus:ring-2 focus:ring-brand/20 placeholder:text-faint`
+- **Pipeline steps**: Running `bg-brand-soft border-brand text-brand` + breathe animation, Done `bg-success-soft`, Failed `bg-destructive-soft`, Pending `bg-muted`
+
+### Typography
+
+- Body/labels: Geist Sans, 14px (`text-sm`), weight 400-600
+- Secondary: 13px (`text-[13px]`), `--muted-foreground`
+- Captions: 12px (`text-xs`), `--faint`
+- Code/logs: Geist Mono, 13px
+- Badges: 11px (`text-[11px]`), weight 500, wide tracking
+
+### Motion
+
+- Spring easing (`--spring-bounce`, `--spring-snappy`) for interactive elements (buttons, modals, panels)
+- `ease-out` for opacity/color transitions only
+- Breathing animation (4-6s infinite) for running indicators
+- All motion must respect `prefers-reduced-motion`
+
+### Gradients
+
+Reserved for emphasis moments only: splash shimmer, active project border, decorative dividers, ambient backdrop. **Never** for button fills, card backgrounds, or text (except splash title).
 
 ## Common Pitfalls
 
@@ -217,3 +329,46 @@ Key relationships:
 - `execSync` in `claude-code.ts` has a 30-minute default timeout. Long pipelines can hit this.
 - The plan confirmation gate uses filesystem polling (not WebSockets). Files live in `/tmp/lilit/{projectId}/`.
 - Model names passed to the CLI are validated against `/^[a-zA-Z0-9._:/-]+$/` to prevent shell injection.
+
+## Troubleshooting
+
+### Pipeline step appears stuck
+
+After `[agent:role] Started` appears in logs, the Claude Code CLI runs in `-p` (print) mode with `--output-format text`. Output is buffered until the agent finishes, so silence in the logs is normal. The UI shows a shimmering "Still working..." indicator on running sections in the log panel and pipeline steps.
+
+**Check if the Claude process is still running:**
+
+```bash
+ps aux | grep "claude.*-p"
+```
+
+**Check if the log file is growing:**
+
+```bash
+ls -la /tmp/lilit/*/live.log
+```
+
+**Tail the live log directly:**
+
+```bash
+# Replace <projectId> with your project's UUID
+tail -f /tmp/lilit/<projectId>/live.log
+```
+
+**Check the worker process:**
+
+```bash
+ps aux | grep "worker.ts"
+```
+
+**Check for abort flag:**
+
+```bash
+ls -la /tmp/lilit/<projectId>/abort.flag
+```
+
+### Common stuck scenarios
+
+- **Agent waiting for API**: Claude Code CLI can take minutes on complex prompts. The 30-minute timeout will eventually kill it.
+- **Process zombie**: If `ps aux | grep claude` shows no process but the pipeline hasn't progressed, the worker may have crashed. Check `docker logs` or the Next.js dev server output.
+- **Plan gate stuck**: If the status shows `awaiting_plan`, check `/tmp/lilit/<projectId>/plan-*.json` for the pending plan file. The UI polls `/api/plan` to show the confirmation modal.

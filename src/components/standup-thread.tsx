@@ -1,11 +1,12 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
-import { useVoicePlayback } from "@/lib/use-voice-playback";
-import { AGENT } from "@/lib/models";
+import { PlaybackButton } from "@/components/playback-button";
+import { useVoicePlayback } from "@/lib/hooks/use-voice-playback";
+import { getAgentIcon } from "@/lib/agent-style";
+import { apiFetch } from "@/lib/utils";
 
 export interface StandupMessageData {
   id?: string;
@@ -34,24 +35,19 @@ interface StandupThreadProps {
   className?: string;
 }
 
-const AGENT_ICONS: Record<string, string> = {
-  [AGENT.PM]: "\uD83D\uDCCB",
-  [AGENT.ARCHITECT]: "\uD83E\uDDED",
-  [AGENT.DEVELOPER]: "\uD83D\uDCBB",
-  [AGENT.QA]: "\uD83D\uDEE1\uFE0F",
-};
-
 const INSIGHT_COLORS: Record<string, string> = {
-  "cross-concern": "bg-amber-500/10 text-amber-700 border-amber-500/20",
-  pattern: "bg-purple-500/10 text-purple-700 border-purple-500/20",
-  process: "bg-blue-500/10 text-blue-700 border-blue-500/20",
-  drift: "bg-red-500/10 text-red-700 border-red-500/20",
-  risk: "bg-orange-500/10 text-orange-700 border-orange-500/20",
+  "cross-concern": "bg-warning-soft text-warning border-warning/20",
+  pattern: "bg-info-soft text-info border-info/20",
+  process: "bg-accent-soft text-accent border-accent/20",
+  drift: "bg-destructive-soft text-destructive border-destructive/20",
+  risk: "bg-orange-500/10 text-orange-400 border-orange-500/20",
+  "debate-follow-up": "bg-destructive-soft text-destructive border-destructive/20",
   none: "bg-muted text-muted-foreground border-muted",
 };
 
 const INSIGHT_LABELS: Record<string, string> = {
   "cross-concern": "Cross-Concern",
+  "debate-follow-up": "Debate Follow-up",
   pattern: "Pattern",
   process: "Process",
   drift: "Drift",
@@ -65,19 +61,25 @@ function FeedbackButtons({ messageId, initialFeedback }: { messageId: string; in
   const [feedback, setFeedback] = useState<string | null>(initialFeedback ?? null);
   const [saving, setSaving] = useState(false);
 
+  useEffect(() => {
+    setFeedback(initialFeedback ?? null);
+  }, [initialFeedback]);
+
   async function sendFeedback(value: "useful" | "not_useful") {
     if (saving) return;
     const newValue = feedback === value ? null : value;
     setSaving(true);
     try {
-      await fetch("/api/standups", {
+      const res = await apiFetch("/api/standups", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ messageId, feedback: newValue }),
       });
-      setFeedback(newValue);
+      if (res.ok) {
+        setFeedback(newValue);
+      }
     } catch {
-      // ignore
+      // network failure — keep previous state
     } finally {
       setSaving(false);
     }
@@ -88,7 +90,7 @@ function FeedbackButtons({ messageId, initialFeedback }: { messageId: string; in
       <Button
         variant="ghost"
         size="sm"
-        className={`h-5 w-5 p-0 text-[10px] ${feedback === "useful" ? "text-green-500" : "text-muted-foreground/40 hover:text-green-500"}`}
+        className={`h-5 w-5 p-0 text-[10px] ${feedback === "useful" ? "text-success" : "text-muted-foreground/40 hover:text-success"}`}
         onClick={() => sendFeedback("useful")}
         disabled={saving}
         title="Useful insight"
@@ -98,7 +100,7 @@ function FeedbackButtons({ messageId, initialFeedback }: { messageId: string; in
       <Button
         variant="ghost"
         size="sm"
-        className={`h-5 w-5 p-0 text-[10px] ${feedback === "not_useful" ? "text-red-500" : "text-muted-foreground/40 hover:text-red-500"}`}
+        className={`h-5 w-5 p-0 text-[10px] ${feedback === "not_useful" ? "text-destructive" : "text-muted-foreground/40 hover:text-destructive"}`}
         onClick={() => sendFeedback("not_useful")}
         disabled={saving}
         title="Not useful"
@@ -122,70 +124,59 @@ function StandupMessageCard({
   isLoading: boolean;
   onPlay?: () => void;
 }) {
-  const icon = AGENT_ICONS[message.fromAgent] ?? "\uD83E\uDD16";
+  const icon = getAgentIcon(message.fromAgent);
   const colorClass = INSIGHT_COLORS[message.insightType] ?? INSIGHT_COLORS.none;
   const label = INSIGHT_LABELS[message.insightType] ?? message.insightType;
 
   return (
-    <Card className={`mb-2 border-l-2 ${isPlaying ? "border-l-primary bg-primary/5" : "border-l-primary/30"}`}>
-      <CardContent className="p-3">
-        <div className="flex items-start gap-2">
-          <span className={`text-lg mt-0.5 ${isPlaying ? "animate-pulse" : ""}`}>{icon}</span>
-          <div className="flex-1 min-w-0">
-            <div className="flex items-center gap-2 mb-1 flex-wrap">
-              <span className="font-medium text-sm">
-                {message.fromCodename}
-              </span>
-              <span className="text-xs text-muted-foreground">
-                ({message.fromAgent})
-              </span>
-              {message.toAgent !== "none" && (
-                <>
-                  <span className="text-xs text-muted-foreground">
-                    &rarr;
-                  </span>
-                  <span className="text-sm">
-                    {message.toCodename}
-                  </span>
-                </>
-              )}
+    <div className={`mb-2 rounded-lg border-l-2 p-3 ${isPlaying ? "bg-brand-soft/20 border-brand" : "bg-card border-border-subtle"} hover:bg-surface-raised/50 transition-colors`}>
+      <div className="flex items-start gap-3">
+        <span className={`text-base mt-0.5 ${isPlaying ? "animate-pulse" : ""}`}>{icon}</span>
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2 mb-1 flex-wrap">
+            <span className="font-semibold text-xs text-foreground">
+              {message.fromCodename}
+            </span>
+            <span className="text-[10px] text-muted-foreground">
+              ({message.fromAgent})
+            </span>
+            {message.toAgent !== "none" && (
+              <>
+                <span className="text-[10px] text-muted-foreground">
+                  &rarr;
+                </span>
+                <span className="text-xs text-foreground">
+                  {message.toCodename}
+                </span>
+              </>
+            )}
+            <Badge
+              variant="outline"
+              className={`text-[9px] px-1.5 py-0 h-4 border ${colorClass}`}
+            >
+              {label}
+            </Badge>
+            {message.actionable && (
               <Badge
                 variant="outline"
-                className={`text-[10px] px-1.5 py-0 ${colorClass}`}
+                className="text-[9px] px-1.5 py-0 h-4 bg-warning-soft text-warning border-warning/20"
               >
-                {label}
+                Actionable
               </Badge>
-              {message.actionable && (
-                <Badge
-                  variant="outline"
-                  className="text-[10px] px-1.5 py-0 bg-yellow-500/10 text-yellow-700 border-yellow-500/20"
-                >
-                  Actionable
-                </Badge>
-              )}
-              {message.id && onPlay && (
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="h-5 w-5 p-0 text-[10px] text-muted-foreground/60 hover:text-foreground"
-                  onClick={onPlay}
-                  disabled={isLoading}
-                  title={isPlaying ? "Playing..." : "Play this message"}
-                >
-                  {isLoading ? "\u23F3" : isPlaying ? "\u23F8" : "\u25B6"}
-                </Button>
-              )}
-              {message.id && (
-                <FeedbackButtons messageId={message.id} initialFeedback={message.feedback} />
-              )}
-            </div>
-            <p className="text-sm text-foreground/90 whitespace-pre-wrap">
-              {message.message}
-            </p>
+            )}
+            {message.id && onPlay && (
+              <PlaybackButton isPlaying={isPlaying} isLoading={isLoading} onPlay={onPlay} />
+            )}
+            {message.id && (
+              <FeedbackButtons messageId={message.id} initialFeedback={message.feedback} />
+            )}
           </div>
+          <p className="text-xs text-muted-foreground leading-relaxed whitespace-pre-wrap">
+            {message.message}
+          </p>
         </div>
-      </CardContent>
-    </Card>
+      </div>
+    </div>
   );
 }
 
@@ -198,18 +189,18 @@ function TrendsSummary({ trends }: { trends: StandupTrend[] }) {
   if (unresolved.length === 0) return null;
 
   return (
-    <div className="mb-3 p-2 rounded-lg bg-muted/50 border border-border/30">
-      <div className="text-xs font-medium text-muted-foreground mb-1.5">
+    <div className="mb-3 p-3 rounded-lg bg-surface border border-border-subtle">
+      <div className="text-xs font-semibold text-muted-foreground mb-2 uppercase tracking-wide">
         Recurring Themes ({unresolved.length})
       </div>
-      <div className="flex flex-wrap gap-1.5">
-        {unresolved.slice(0, 5).map((trend, i) => {
+      <div className="flex flex-wrap gap-2">
+        {unresolved.slice(0, 5).map((trend) => {
           const colorClass = INSIGHT_COLORS[trend.insightType] ?? INSIGHT_COLORS.none;
           return (
             <Badge
-              key={i}
+              key={`${trend.theme}-${trend.insightType}`}
               variant="outline"
-              className={`text-[10px] px-1.5 py-0.5 ${colorClass}`}
+              className={`text-[9px] px-2 py-0.5 h-5 border ${colorClass}`}
             >
               {trend.theme} ({trend.occurrences}x)
             </Badge>
@@ -235,24 +226,24 @@ export function StandupThread({ messages, trends, className }: StandupThreadProp
   return (
     <div className={className}>
       <div className="flex items-center gap-2 mb-3">
-        <span className="text-sm font-medium">
+        <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
           Team Standup
         </span>
         {insights.length > 0 && (
-          <Badge variant="secondary" className="text-xs">
+          <Badge variant="secondary" className="text-[10px] h-4 px-1.5 text-muted-foreground">
             {insights.length} insight{insights.length !== 1 ? "s" : ""}
           </Badge>
         )}
         {noTensions.length > 0 && (
-          <span className="text-xs text-muted-foreground">
-            {noTensions.length} agent{noTensions.length !== 1 ? "s" : ""} reported no tensions
+          <span className="text-[10px] text-faint ml-2">
+            {noTensions.length} reported clean
           </span>
         )}
         {hasVoiceMessages && (
           <Button
             variant="outline"
             size="sm"
-            className="ml-auto h-6 text-[11px] px-2"
+            className="ml-auto h-6 text-[10px] px-2 hover:bg-surface-raised"
             onClick={playingAll ? stop : playAll}
           >
             {playingAll ? "\u23F9 Stop" : "\u25B6 Play Standup"}
@@ -262,26 +253,30 @@ export function StandupThread({ messages, trends, className }: StandupThreadProp
 
       {trends && <TrendsSummary trends={trends} />}
 
-      {insights.map((msg, i) => (
-        <StandupMessageCard
-          key={msg.id ?? i}
-          message={msg}
-          isPlaying={playingId === msg.id}
-          isLoading={loadingId === msg.id}
-          onPlay={msg.id ? () => playSingle(msg.id!) : undefined}
-        />
-      ))}
+      <div className="space-y-1">
+        {insights.map((msg, i) => (
+          <StandupMessageCard
+            key={msg.id ?? i}
+            message={msg}
+            isPlaying={playingId === msg.id}
+            isLoading={loadingId === msg.id}
+            onPlay={msg.id ? () => playSingle(msg.id!) : undefined}
+          />
+        ))}
+      </div>
 
       {noTensions.length > 0 && insights.length > 0 && (
-        <p className="text-xs text-muted-foreground mt-2 pl-1">
+        <p className="text-[10px] text-faint mt-2 pl-1 italic">
           {noTensions.map((m) => m.fromCodename).join(", ")} reported no tensions.
         </p>
       )}
 
       {insights.length === 0 && (
-        <p className="text-xs text-muted-foreground mt-1 pl-1">
-          All agents reported no tensions. Clean pipeline run.
-        </p>
+        <div className="p-4 rounded-lg border border-dashed border-border-subtle text-center">
+          <p className="text-xs text-muted-foreground">
+            All agents reported no tensions. Clean pipeline run. ✨
+          </p>
+        </div>
       )}
     </div>
   );

@@ -129,9 +129,8 @@ export function getSkillsForAgent(
 ): string[] {
   const all = getSkillRegistry();
 
-  // Known stack tags — if a skill has ANY of these, it's stack-specific
-  const stackTags = new Set(["nextjs", "react", "vue", "svelte", "nodejs", "node", "python", "django", "fastapi", "solidity"]);
-  // Known role tags
+  // Role tags are structurally tied to agent role directories — this set is stable.
+  // Everything else is treated as a stack tag (no hardcoded stack list needed).
   const roleTags = new Set(["review", "code", "fix", "devops", "automation", "manual", "security"]);
 
   const matched: string[] = [];
@@ -142,7 +141,7 @@ export function getSkillsForAgent(
       continue;
     }
 
-    const skillStackTags = skill.tags.filter((t) => stackTags.has(t));
+    const skillStackTags = skill.tags.filter((t) => !roleTags.has(t));
     const skillRoleTags = skill.tags.filter((t) => roleTags.has(t));
 
     // Stack matching: if skill has stack tags, at least one must match

@@ -5,19 +5,27 @@
  */
 
 import { prisma } from "./prisma";
-import { runLLM } from "./llm";
-import { getCheapestAvailableModel } from "./providers";
+import { getAdapter, getCheapestAvailableModel } from "./providers/index";
 import { calculateCost } from "./cost-calculator";
 import { logEvent } from "./event-log";
 import {
   getRelationshipContext,
   getPersonality,
+  getCodename,
 } from "./personality";
 import { queryMemories, formatMemoriesForPrompt } from "./memory";
 import { storeMemory } from "./memory";
-import { getAgentRegistry } from "./agent-loader";
+import { getAgent, getAgentRegistry } from "./agent-loader";
+import { extractJSON } from "./utils";
 import type { ProjectSettings } from "@/types/settings";
+import { type StepInfo as BaseStepInfo } from "@/types/pipeline";
 import { AGENT } from "@/lib/models";
+import {
+  STANDUP_RAG_LIMIT,
+  OWN_STEP_RESULTS_LENGTH,
+  OTHER_STEP_RESULTS_LENGTH,
+  STANDUP_MAX_TOKENS,
+} from "@/lib/constants";
 
 // --- Types ---
 
@@ -48,11 +56,7 @@ export interface StandupResult {
   totalCost: number;
 }
 
-interface StepInfo {
-  agent: string;
-  role?: string;
-  title: string;
-  status: string;
+interface StepInfo extends BaseStepInfo {
   output: string;
 }
 
@@ -66,6 +70,15 @@ interface PlanInfo {
   }>;
 }
 
+interface DebateInfo {
+  challengerAgent: string;
+  defenderAgent: string;
+  triggerOpinion: string;
+  outcome: string;
+  turns: Array<{ agent: string; messageType: string; content: string }>;
+  resolutionNote?: string;
+}
+
 interface GenerateStandupOpts {
   pipelineRunId: string;
   projectId: string;
@@ -75,14 +88,10 @@ interface GenerateStandupOpts {
   fixCycleCount: number;
   totalCost: number;
   settings?: ProjectSettings;
+  debates?: DebateInfo[];
 }
 
 // --- Codename Resolution ---
-
-function getCodename(agentType: string): string {
-  const personality = getPersonality(agentType);
-  return personality?.codename ?? agentType;
-}
 
 function getCodenameMap(): Record<string, string> {
   const registry = getAgentRegistry();
@@ -121,50 +130,29 @@ Rules:
 5. You may produce multiple insights (up to 3). Output a JSON array.
 6. Stay in character but never let personality override technical accuracy.`;
 
-const AGENT_LENSES: Record<string, string> = {
-  [AGENT.PM]: `## Your Overwatch Lens: Process Efficiency
-
-Scan the entire pipeline for PROCESS tensions:
-
-- Were there unnecessary steps? (architect called for a trivial change)
-- Did fix cycles indicate poor upfront specification?
-- Was the pipeline ordering suboptimal? (review found issues that better
-  acceptance criteria would have prevented)
-- Did any agent take significantly longer than expected?
-- Were skills assigned effectively, or did agents lack context they needed?`,
-
-  [AGENT.ARCHITECT]: `## Your Overwatch Lens: Design Integrity
-
-Scan the entire pipeline for DESIGN tensions:
-
-- Did the implementation deviate from agreed architectural patterns?
-- Are there consistency violations? (different patterns used for similar problems)
-- Did new code introduce dependencies that conflict with the tech stack decisions?
-- Are there scaling concerns in the implementation approach?
-- Did the folder structure or module boundaries get violated?`,
-
-  [AGENT.DEVELOPER]: `## Your Overwatch Lens: Code Quality & Consistency
-
-Scan the entire pipeline for CODE QUALITY tensions:
-
-- Are there duplicate utilities or redundant libraries?
-- Did new code follow different patterns than existing code? (naming conventions,
-  error handling approaches, API response formats)
-- Are there performance concerns? (N+1 queries, unnecessary re-renders,
-  missing indexes)
-- Is there dead code or unused imports introduced?
-- Are there missing edge cases in the implementation?`,
-
-  [AGENT.QA]: `## Your Overwatch Lens: User Experience & Reliability
-
-Scan the entire pipeline for USER-FACING tensions:
-
-- Are there missing loading states, error boundaries, or empty states?
-- Do new UI elements have proper accessibility attributes?
-- Are there user flows that could result in confusing or broken states?
-- Did the implementation miss edge cases in the acceptance criteria?
-- Are there race conditions or timing issues in async operations?`,
+const GENERIC_FALLBACK = {
+  lens: "General Quality",
+  focus: [
+    "Are there inconsistencies between this step's output and prior steps?",
+    "Were there signs of miscommunication or unclear requirements?",
+    "Are there risks or technical debt introduced?",
+  ],
 };
+
+/** Build the overwatch lens section for an agent, preferring AGENT.md frontmatter. */
+function getAgentLens(agentType: string): string {
+  const agent = getAgent(agentType);
+  const overwatchLens = agent?.overwatchLens;
+  const overwatchFocus = agent?.overwatchFocus;
+
+  if (overwatchLens && overwatchFocus?.length) {
+    const focusItems = overwatchFocus.map((f) => `- ${f}`).join("\n");
+    return `## Your Overwatch Lens: ${overwatchLens}\n\nScan the entire pipeline for tensions:\n\n${focusItems}`;
+  }
+
+  const focusItems = GENERIC_FALLBACK.focus.map((f) => `- ${f}`).join("\n");
+  return `## Your Overwatch Lens: ${GENERIC_FALLBACK.lens}\n\nScan the entire pipeline for tensions:\n\n${focusItems}`;
+}
 
 // --- Prompt Builder ---
 
@@ -178,6 +166,7 @@ async function buildOverwatchPrompt(opts: {
   totalCost: number;
   participants: Array<{ agent: string; codename: string }>;
   personalityEnabled: boolean;
+  debates?: DebateInfo[];
 }): Promise<string> {
   const {
     agentType,
@@ -189,6 +178,7 @@ async function buildOverwatchPrompt(opts: {
     totalCost,
     participants,
     personalityEnabled,
+    debates,
   } = opts;
 
   const codename = getCodename(agentType);
@@ -223,11 +213,15 @@ async function buildOverwatchPrompt(opts: {
 
   // Output format
   lines.push("");
-  lines.push(`Output format (JSON array):
+  lines.push(`Write TO a specific teammate by name. Be direct.
+If you think someone's work was subpar, say so.
+If a debate outcome was wrong, flag it.
+
+Output format (JSON array):
 [
   {
     "to": "<teammate name>",
-    "insight_type": "<cross-concern|pattern|process|drift|risk>",
+    "insight_type": "<cross-concern|pattern|process|drift|risk|debate-follow-up>",
     "message": "<your observation>",
     "actionable": <true|false>
   }
@@ -243,10 +237,9 @@ If no tensions detected:
   }
 ]`);
 
-  // Agent-specific lens
-  const lens = AGENT_LENSES[agentType] ?? AGENT_LENSES.developer;
+  // Agent-specific lens (frontmatter-driven with fallback)
   lines.push("");
-  lines.push(lens);
+  lines.push(getAgentLens(agentType));
 
   // Relationship context
   if (personalityEnabled) {
@@ -270,7 +263,7 @@ If no tensions detected:
         query: `${agentType} overwatch scan for: ${userMessage}`,
         agent: agentType,
         types: ["decision", "code_pattern"],
-        limit: 5,
+        limit: STANDUP_RAG_LIMIT,
       });
       const memCtx = formatMemoriesForPrompt(memories);
       if (memCtx) {
@@ -309,7 +302,7 @@ If no tensions detected:
     for (const s of ownSteps) {
       const label = s.role ? `${s.agent}:${s.role}` : s.agent;
       lines.push(`\n**${label}** (${s.status}): ${s.title}`);
-      lines.push(s.output.slice(0, 2000));
+      lines.push(s.output.slice(0, OWN_STEP_RESULTS_LENGTH));
     }
   }
 
@@ -319,8 +312,28 @@ If no tensions detected:
     for (const s of otherSteps) {
       const label = s.role ? `${s.agent}:${s.role}` : s.agent;
       lines.push(`\n**${label}** (${s.status}): ${s.title}`);
-      lines.push(s.output.slice(0, 1500));
+      lines.push(s.output.slice(0, OTHER_STEP_RESULTS_LENGTH));
     }
+  }
+
+  // Debate context
+  if (debates && debates.length > 0) {
+    lines.push("");
+    lines.push("## Debates This Run");
+    for (const debate of debates) {
+      const challengerName = participants.find((p) => p.agent === debate.challengerAgent)?.codename ?? debate.challengerAgent;
+      const defenderName = participants.find((p) => p.agent === debate.defenderAgent)?.codename ?? debate.defenderAgent;
+      lines.push(`\n**${challengerName} vs ${defenderName}** (outcome: ${debate.outcome})`);
+      lines.push(`Trigger: "${debate.triggerOpinion}"`);
+      if (debate.resolutionNote) {
+        lines.push(`Resolution: ${debate.resolutionNote.slice(0, 200)}`);
+      }
+    }
+    lines.push("");
+    lines.push("Debate-specific questions:");
+    lines.push("- Did any debate outcomes get ignored in subsequent steps?");
+    lines.push("- Are the same disagreements recurring? Should this become a convention?");
+    lines.push("- Did a debate lead to better or worse outcomes?");
   }
 
   lines.push("");
@@ -334,36 +347,10 @@ If no tensions detected:
 // --- JSON Parser ---
 
 function parseStandupJSON(raw: string): StandupInsight[] {
-  // Try direct parse
-  try {
-    const parsed = JSON.parse(raw.trim());
-    if (Array.isArray(parsed)) return parsed;
-    return [parsed];
-  } catch {
-    // Try extracting from markdown code block
-  }
-
-  const jsonMatch = raw.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
-  if (jsonMatch) {
-    try {
-      const parsed = JSON.parse(jsonMatch[1].trim());
-      if (Array.isArray(parsed)) return parsed;
-      return [parsed];
-    } catch {
-      // fall through
-    }
-  }
-
-  // Try finding array in the text
-  const arrayMatch = raw.match(/\[[\s\S]*\]/);
-  if (arrayMatch) {
-    try {
-      return JSON.parse(arrayMatch[0]);
-    } catch {
-      // fall through
-    }
-  }
-
+  const parsed = extractJSON(raw);
+  if (parsed === null) return [];
+  if (Array.isArray(parsed)) return parsed;
+  if (typeof parsed === "object") return [parsed as StandupInsight];
   return [];
 }
 
@@ -380,6 +367,7 @@ export async function generateStandup(
     fixCycleCount,
     totalCost,
     settings,
+    debates,
   } = opts;
 
   const personalityEnabled = settings?.personalityEnabled !== false;
@@ -408,7 +396,8 @@ export async function generateStandup(
     : "PARTIAL FAILURE";
 
   // 3. Generate all standup messages in parallel
-  const { model } = await getCheapestAvailableModel();
+  const { provider, model } = await getCheapestAvailableModel();
+  const adapter = getAdapter(provider);
   const systemPrompt =
     "You are a senior software professional performing a post-pipeline Overwatch scan. Output ONLY valid JSON.";
 
@@ -425,22 +414,23 @@ export async function generateStandup(
           totalCost,
           participants,
           personalityEnabled,
+          debates,
         });
 
-        const llmResult = await runLLM({
+        const adapterResult = await adapter.execute({
           prompt,
           systemPrompt,
           model,
-          maxTokens: 1024,
+          maxTokens: STANDUP_MAX_TOKENS,
           agentLabel: `standup:${participant.agent}`,
         });
 
-        const insights = parseStandupJSON(llmResult.text);
-        const cost = llmResult.tokensUsed
-          ? calculateCost(model, llmResult.tokensUsed)
+        const insights = parseStandupJSON(adapterResult.output);
+        const cost = adapterResult.tokensUsed
+          ? calculateCost(model, adapterResult.tokensUsed)
           : 0;
-        const tokens = llmResult.tokensUsed
-          ? llmResult.tokensUsed.inputTokens + llmResult.tokensUsed.outputTokens
+        const tokens = adapterResult.tokensUsed
+          ? adapterResult.tokensUsed.inputTokens + adapterResult.tokensUsed.outputTokens
           : 0;
         const costPerInsight = insights.length > 0 ? cost / insights.length : 0;
         const tokensPerInsight =

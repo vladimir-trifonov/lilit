@@ -7,7 +7,7 @@
 import fs from "fs";
 import path from "path";
 import yaml from "js-yaml";
-import { DEFAULT_CLAUDE_MODEL } from "./providers";
+import { DEFAULT_CLAUDE_MODEL } from "./models";
 
 const AGENTS_DIR = path.resolve(process.cwd(), "agents");
 
@@ -58,6 +58,10 @@ export interface RoleDefinition {
   model?: string;
   systemPrompt: string;
   personalityOverlay?: PersonalityOverlay;
+  receivesPlanContext?: boolean;
+  producesPassFail?: boolean;
+  evaluatesOutput?: boolean;
+  eventType?: string;
 }
 
 export interface AgentDefinition {
@@ -71,6 +75,14 @@ export interface AgentDefinition {
   systemPrompt: string;
   roles: Record<string, RoleDefinition>;
   personality?: ParsedPersonality;
+  personalitySeed?: string;
+  icon?: string;
+  color?: string;
+  overwatchLens?: string;
+  overwatchFocus?: string[];
+  taskPreamble?: string;
+  eventType?: string;
+  ttsVoice?: string;
 }
 
 interface Frontmatter {
@@ -83,7 +95,18 @@ interface Frontmatter {
   capabilities?: string[];
   tags?: string[];
   personality?: ParsedPersonality;
+  personality_seed?: string;
   personality_overlay?: PersonalityOverlay;
+  icon?: string;
+  color?: string;
+  overwatch_lens?: string;
+  overwatch_focus?: string[];
+  task_preamble?: string;
+  event_type?: string;
+  tts_voice?: string;
+  receives_plan_context?: boolean;
+  produces_pass_fail?: boolean;
+  evaluates_output?: boolean;
 }
 
 // --- Frontmatter Parser ---
@@ -119,6 +142,14 @@ function loadAgent(type: string): AgentDefinition | null {
     systemPrompt: body,
     roles: {},
     personality: meta.personality,
+    personalitySeed: meta.personality_seed,
+    icon: meta.icon,
+    color: meta.color,
+    overwatchLens: meta.overwatch_lens,
+    overwatchFocus: meta.overwatch_focus,
+    taskPreamble: meta.task_preamble,
+    eventType: meta.event_type,
+    ttsVoice: meta.tts_voice,
   };
 
   // Load roles
@@ -137,6 +168,10 @@ function loadAgent(type: string): AgentDefinition | null {
         model: roleMeta.model,
         systemPrompt: roleBody,
         personalityOverlay: roleMeta.personality_overlay,
+        receivesPlanContext: roleMeta.receives_plan_context,
+        producesPassFail: roleMeta.produces_pass_fail,
+        evaluatesOutput: roleMeta.evaluates_output,
+        eventType: roleMeta.event_type,
       };
     }
   }

@@ -3,21 +3,7 @@
  * Simple regex-based highlighting without external dependencies
  */
 
-export interface HighlightedSegment {
-  text: string;
-  type:
-    | "text"
-    | "keyword"
-    | "string"
-    | "number"
-    | "comment"
-    | "operator"
-    | "function"
-    | "error"
-    | "success"
-    | "warning"
-    | "code-block";
-}
+import { LOG_SEPARATOR_DETECT_LENGTH } from "@/lib/constants";
 
 /**
  * Parse log content into sections by agent
@@ -36,6 +22,7 @@ export function parseLogSections(logContent: string): LogSection[] {
   const sections: LogSection[] = [];
   let currentSection: Partial<LogSection> | null = null;
   let currentContent: string[] = [];
+  const preContent: string[] = [];
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
@@ -43,6 +30,21 @@ export function parseLogSections(logContent: string): LogSection[] {
     // Detect agent start: "🚀 [agent:role] Started"
     const startMatch = line.match(/🚀 \[([^\]]+)\] Started/);
     if (startMatch) {
+      // Save pre-section content as a "Pipeline" section
+      if (!currentSection && preContent.length > 0) {
+        const trimmed = preContent.join("\n").trim();
+        if (trimmed) {
+          sections.push({
+            agent: "pipeline",
+            header: "Pipeline",
+            content: trimmed,
+            startLine: 0,
+            endLine: i - 1,
+            status: "done",
+          });
+        }
+      }
+
       // Save previous section
       if (currentSection) {
         sections.push({
@@ -64,25 +66,27 @@ export function parseLogSections(logContent: string): LogSection[] {
       continue;
     }
 
-    // Detect agent completion: "✅ [agent:role] Done"
-    const doneMatch = line.match(/✅ \[([^\]]+)\] Done/);
+    // Detect agent completion: "[agent:role] Done" or "✅ [agent:role] Done"
+    const doneMatch = line.match(/(?:✅ )?\[([^\]]+)\] Done/);
     if (doneMatch && currentSection) {
       currentSection.status = "done";
       currentContent.push(line);
       continue;
     }
 
-    // Detect agent failure: "❌ [agent:role] Failed"
-    const failMatch = line.match(/❌ \[([^\]]+)\] Failed/);
+    // Detect agent failure: "[agent:role] Failed" (with or without emoji prefix)
+    const failMatch = line.match(/(?:❌ |🛑 )?\[([^\]]+)\] (?:Failed|Aborted)/);
     if (failMatch && currentSection) {
       currentSection.status = "failed";
       currentContent.push(line);
       continue;
     }
 
-    // Add line to current section
+    // Add line to current section or pre-section buffer
     if (currentSection) {
       currentContent.push(line);
+    } else {
+      preContent.push(line);
     }
   }
 
@@ -96,105 +100,69 @@ export function parseLogSections(logContent: string): LogSection[] {
     } as LogSection);
   }
 
+  // If no agent sections were found, put everything in a single pipeline section
+  if (sections.length === 0 && preContent.length > 0) {
+    const trimmed = preContent.join("\n").trim();
+    if (trimmed) {
+      sections.push({
+        agent: "pipeline",
+        header: "Pipeline",
+        content: trimmed,
+        startLine: 0,
+        endLine: lines.length - 1,
+        status: "running",
+      });
+    }
+  }
+
   return sections;
 }
 
-/**
- * Simple syntax highlighting for code blocks
- */
-export function highlightCode(code: string): string {
-  // JavaScript/TypeScript patterns
-  const patterns = [
-    // Comments
-    { pattern: /(\/\/.*$|\/\*[\s\S]*?\*\/)/gm, className: "text-zinc-500 italic" },
-    // Strings
-    { pattern: /("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\])*`)/g, className: "text-green-400" },
-    // Numbers
-    { pattern: /\b(\d+\.?\d*)\b/g, className: "text-purple-400" },
-    // Keywords
-    { pattern: /\b(const|let|var|function|class|if|else|return|import|export|from|async|await|try|catch|throw|new|typeof|instanceof)\b/g, className: "text-blue-400 font-medium" },
-    // Functions
-    { pattern: /\b([a-zA-Z_$][a-zA-Z0-9_$]*)\s*\(/g, className: "text-yellow-400" },
-    // Operators
-    { pattern: /(=>|===|!==|==|!=|<=|>=|&&|\|\||[+\-*/%=<>!])/g, className: "text-cyan-400" },
-  ];
-
-  let highlighted = code;
-
-  // Escape HTML first
-  highlighted = highlighted
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;");
-
-  // Apply patterns
-  for (const { pattern, className } of patterns) {
-    highlighted = highlighted.replace(pattern, (match) => {
-      return `<span class="${className}">${match}</span>`;
-    });
-  }
-
-  return highlighted;
-}
 
 /**
- * Detect if a block of text is code
+ * Classify a log line — returns the plain text and a CSS class for styling.
+ * No HTML escaping; the component renders via React elements.
  */
-export function isCodeBlock(text: string): boolean {
-  // Check for code indicators
-  const codeIndicators = [
-    /```/,  // Markdown code fence
-    /^\s*function\s+\w+/m,  // Function declaration
-    /^\s*const\s+\w+/m,  // Const declaration
-    /^\s*import\s+/m,  // Import statement
-    /^\s*export\s+/m,  // Export statement
-    /^\s*class\s+\w+/m,  // Class declaration
-    /^\s*interface\s+\w+/m,  // Interface declaration
-    /^\s*type\s+\w+/m,  // Type declaration
-    /{\s*[\w]+:\s*[\w"'`]/,  // Object literal
-  ];
-
-  return codeIndicators.some((pattern) => pattern.test(text));
-}
-
-/**
- * Format log line with color coding
- */
-export function formatLogLine(line: string): { html: string; type: string } {
+export function formatLogLine(line: string): { text: string; className: string; type: string } {
   // Error lines
   if (line.includes("❌") || line.includes("ERROR") || line.toLowerCase().includes("error:")) {
-    return { html: `<span class="text-red-400">${escapeHtml(line)}</span>`, type: "error" };
+    return { text: line, className: "text-red-400", type: "error" };
   }
 
   // Success lines
   if (line.includes("✅") || line.includes("SUCCESS")) {
-    return { html: `<span class="text-green-400">${escapeHtml(line)}</span>`, type: "success" };
+    return { text: line, className: "text-green-400", type: "success" };
   }
 
   // Warning lines
-  if (line.includes("⚠️") || line.includes("WARNING") || line.includes("WARN")) {
-    return { html: `<span class="text-yellow-400">${escapeHtml(line)}</span>`, type: "warning" };
+  if (line.includes("\u26A0\uFE0F") || line.includes("WARNING") || line.includes("WARN")) {
+    return { text: line, className: "text-yellow-400", type: "warning" };
+  }
+
+  // Debate lines
+  if (line.includes("\uD83D\uDCAC DEBATE:")) {
+    return { text: line, className: "text-red-400 font-semibold", type: "debate" };
+  }
+  if (line.match(/^\s+\[[\w]+\] \((?:challenge|counter|concede|escalate|moderate)\):/)) {
+    return { text: line, className: "text-orange-400 pl-4", type: "debate-turn" };
+  }
+  if (line.match(/^\s+Outcome:/)) {
+    return { text: line, className: "text-orange-300 font-medium", type: "debate-outcome" };
+  }
+  if (line.match(/^\s+Opinion:/)) {
+    return { text: line, className: "text-red-300/80 italic", type: "debate-opinion" };
   }
 
   // Info lines (headers, separators)
-  if (line.includes("=".repeat(10)) || line.includes("─".repeat(10))) {
-    return { html: `<span class="text-zinc-600">${escapeHtml(line)}</span>`, type: "separator" };
+  if (line.includes("=".repeat(LOG_SEPARATOR_DETECT_LENGTH)) || line.includes("─".repeat(LOG_SEPARATOR_DETECT_LENGTH))) {
+    return { text: line, className: "text-zinc-600", type: "separator" };
   }
 
   // Agent labels
   if (line.match(/^\[[\w:]+\]/)) {
-    return { html: `<span class="text-blue-400 font-medium">${escapeHtml(line)}</span>`, type: "label" };
+    return { text: line, className: "text-blue-400 font-medium", type: "label" };
   }
 
   // Default
-  return { html: escapeHtml(line), type: "text" };
-}
-
-function escapeHtml(text: string): string {
-  return text
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#039;");
+  return { text: line, className: "", type: "text" };
 }

@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useRef, useCallback } from "react";
+import { apiFetch } from "@/lib/utils";
 
 export interface VoicePlayableMessage {
   id?: string;
@@ -40,7 +41,7 @@ export function useVoicePlayback<T extends VoicePlayableMessage>(
 
     setLoadingId(msgId);
     try {
-      const res = await fetch("/api/voice/generate", {
+      const res = await apiFetch("/api/voice/generate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ messageId: msgId, sourceType }),

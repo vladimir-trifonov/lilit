@@ -4,6 +4,22 @@
  */
 
 import { storeMemory } from "./memory";
+import {
+  MAX_SIGNALS_PER_RUN,
+  OPINION_MATCH_MIN_LENGTH,
+  OPINION_MATCH_MAX_LENGTH,
+  MIN_OUTPUT_LENGTH_FOR_SIGNALS,
+  SIGNIFICANCE_ARCHITECTURE,
+  SIGNIFICANCE_PLAN_CREATED,
+  SIGNIFICANCE_PLAN_REJECTED,
+  SIGNIFICANCE_REVIEW_DONE,
+  SIGNIFICANCE_FEEDBACK,
+  SIGNIFICANCE_DEFAULT,
+  SIGNIFICANCE_PERSONALITY,
+  SIGNIFICANCE_CODE_PATTERN,
+  CONVENTION_FILE_MAX_SIZE,
+  MEMORY_CONTENT_MAX_LENGTH,
+} from "@/lib/constants";
 
 // --- Decision Ingestion ---
 
@@ -77,17 +93,17 @@ function buildDecisionTitle(
 function getDecisionSignificance(eventType: string): number {
   switch (eventType) {
     case "architecture_defined":
-      return 0.9;
+      return SIGNIFICANCE_ARCHITECTURE;
     case "plan_created":
-      return 0.7;
+      return SIGNIFICANCE_PLAN_CREATED;
     case "plan_rejected":
-      return 0.8;
+      return SIGNIFICANCE_PLAN_REJECTED;
     case "review_done":
-      return 0.6;
+      return SIGNIFICANCE_REVIEW_DONE;
     case "feedback_routed":
-      return 0.5;
+      return SIGNIFICANCE_FEEDBACK;
     default:
-      return 0.5;
+      return SIGNIFICANCE_DEFAULT;
   }
 }
 
@@ -102,7 +118,6 @@ const OPINION_PATTERNS = [
   /(?:convention|standard|pattern) (?:here |in this project )?(?:is|should be)\s+(.{10,100})/gi,
 ];
 
-const MAX_SIGNALS_PER_RUN = 5;
 
 /**
  * Extract opinion/preference signals from agent output.
@@ -115,7 +130,7 @@ export async function ingestPersonalityFromAgentRun(
   role: string | undefined,
   output: string
 ): Promise<void> {
-  if (!output || output.length < 50) return;
+  if (!output || output.length < MIN_OUTPUT_LENGTH_FOR_SIGNALS) return;
 
   const signals: Array<{ match: string; pattern: number }> = [];
 
@@ -125,7 +140,7 @@ export async function ingestPersonalityFromAgentRun(
     while ((match = pattern.exec(output)) !== null && signals.length < MAX_SIGNALS_PER_RUN) {
       const captured = (match[1] ?? match[0]).trim();
       // Skip very short or very long matches
-      if (captured.length >= 10 && captured.length <= 200) {
+      if (captured.length >= OPINION_MATCH_MIN_LENGTH && captured.length <= OPINION_MATCH_MAX_LENGTH) {
         signals.push({ match: captured, pattern: i });
       }
     }
@@ -141,7 +156,7 @@ export async function ingestPersonalityFromAgentRun(
       content: signals[i].match,
       sourceType: "agent_run",
       sourceId: `${agentRunId}:signal:${i}`,
-      significance: 0.4,
+      significance: SIGNIFICANCE_PERSONALITY,
     });
   }
 }
@@ -186,7 +201,7 @@ export async function indexProjectCodePatterns(
 
       const content = fs.readFileSync(filePath, "utf-8");
       // Skip very large files
-      if (content.length > 10000) continue;
+      if (content.length > CONVENTION_FILE_MAX_SIZE) continue;
 
       // For package.json, extract only relevant sections
       let processedContent = content;
@@ -211,10 +226,10 @@ export async function indexProjectCodePatterns(
         projectId,
         type: "code_pattern",
         title: `Project convention: ${fileName}`,
-        content: processedContent.slice(0, 3000),
+        content: processedContent.slice(0, MEMORY_CONTENT_MAX_LENGTH),
         sourceType: "file_index",
         sourceId: `file:${fileName}`,
-        significance: 0.7,
+        significance: SIGNIFICANCE_CODE_PATTERN,
       });
       indexed++;
     } catch {

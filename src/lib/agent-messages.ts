@@ -16,13 +16,13 @@
  */
 
 import { prisma } from "./prisma";
-import { getPersonality } from "./personality";
+import { getCodename } from "./personality";
 
 // ---- Types ----
 
 export interface ParsedAgentMessage {
   to: string;
-  type: "question" | "flag" | "suggestion" | "handoff" | "response";
+  type: "question" | "flag" | "suggestion" | "handoff" | "response" | "challenge" | "counter" | "concede" | "escalate" | "moderate";
   message: string;
 }
 
@@ -39,7 +39,7 @@ export interface StoredAgentMessage {
 
 // ---- Prompt instructions ----
 
-const VALID_MESSAGE_TYPES = ["question", "flag", "suggestion", "handoff", "response"];
+const VALID_MESSAGE_TYPES = ["question", "flag", "suggestion", "handoff", "response", "challenge", "counter", "concede", "escalate", "moderate"];
 
 /**
  * Returns prompt instructions that teach an agent how to emit messages.
@@ -51,8 +51,8 @@ export function getMessageInstructions(agentType: string, otherAgents: string[])
 
   const recipientList = recipients
     .map((a) => {
-      const p = getPersonality(a);
-      return p ? `- ${a} (${p.codename})` : `- ${a}`;
+      const codename = getCodename(a);
+      return codename !== a ? `- ${a} (${codename})` : `- ${a}`;
     })
     .join("\n");
 
@@ -60,14 +60,19 @@ export function getMessageInstructions(agentType: string, otherAgents: string[])
 ## Inter-Agent Communication
 
 You can send messages to other agents currently working on this pipeline.
-Only send a message if you have:
-- A QUESTION you cannot answer from your current context
-- A TENSION you detected that the recipient needs to know about NOW
+
+Send a message when:
+- You DISAGREE with an approach or decision — say so directly
+- You have a QUESTION another agent should answer
+- You spotted a TENSION, risk, or concern the recipient needs to know
+- You want to HAND OFF context to the next agent
+
+Your opinions matter. If something conflicts with your beliefs, speak up.
+Do NOT stay silent when you see a problem.
 
 Do NOT send messages for:
 - Status updates (the live log handles that)
-- Encouragement or acknowledgments
-- Questions answerable from the context already provided
+- Generic encouragement or acknowledgments
 
 Available recipients:
 ${recipientList}
@@ -83,8 +88,6 @@ Message types:
 - flag: You detected a tension or issue relevant to this agent
 - suggestion: A non-blocking recommendation
 - handoff: Context for the agent who runs after you
-
-You may include zero or multiple message blocks. Silence is preferred over noise.
 `;
 }
 
@@ -192,27 +195,47 @@ export async function getAllMessages(pipelineRunId: string): Promise<StoredAgent
  * When voiceEnabled is true, messages are labeled as "[Voice message from X]"
  * to create the theatrical effect of agents hearing each other speak.
  */
+const DEBATE_TYPES = new Set(["challenge", "counter", "concede", "escalate", "moderate"]);
+
 export function formatInboxForPrompt(messages: StoredAgentMessage[], voiceEnabled = false): string {
   if (messages.length === 0) return "";
 
-  const formatted = messages
-    .map((m) => {
-      const from = getPersonality(m.fromAgent);
-      const sender = from ? `${from.codename} (${m.fromAgent})` : m.fromAgent;
-      const prefix = voiceEnabled ? "Voice message" : "Message";
-      return `- [${prefix}] [${m.messageType}] from ${sender}: ${m.content}`;
-    })
-    .join("\n");
+  // Separate regular messages from debate messages
+  const regularMessages = messages.filter((m) => !DEBATE_TYPES.has(m.messageType));
+  const debateMessages = messages.filter((m) => DEBATE_TYPES.has(m.messageType));
 
-  const header = voiceEnabled
-    ? "## Voice Messages From Other Agents\n\nThe following voice messages were left for you by other agents working on this pipeline. Each agent spoke these messages aloud during their pipeline phase:"
-    : "## Messages From Other Agents\n\nThe following messages were left for you by other agents working on this pipeline:";
+  const sections: string[] = [];
 
-  return `
-${header}
+  if (regularMessages.length > 0) {
+    const formatted = regularMessages
+      .map((m) => {
+        const codename = getCodename(m.fromAgent);
+        const sender = codename !== m.fromAgent ? `${codename} (${m.fromAgent})` : m.fromAgent;
+        const prefix = voiceEnabled ? "Voice message" : "Message";
+        return `- [${prefix}] [${m.messageType}] from ${sender}: ${m.content}`;
+      })
+      .join("\n");
 
-${formatted}
+    const header = voiceEnabled
+      ? "## Voice Messages From Other Agents\n\nThe following voice messages were left for you by other agents working on this pipeline. Each agent spoke these messages aloud during their pipeline phase:"
+      : "## Messages From Other Agents\n\nThe following messages were left for you by other agents working on this pipeline:";
 
-Consider these messages when doing your work. If a question was asked of you, address it in your output. If a flag or suggestion was raised, factor it into your approach.
-`;
+    sections.push(`${header}\n\n${formatted}`);
+  }
+
+  if (debateMessages.length > 0) {
+    const formatted = debateMessages
+      .map((m) => {
+        const codename = getCodename(m.fromAgent);
+        const sender = codename !== m.fromAgent ? `${codename} (${m.fromAgent})` : m.fromAgent;
+        return `- [${m.messageType}] ${sender}: ${m.content}`;
+      })
+      .join("\n");
+
+    sections.push(`## Debate Results From This Pipeline\n\n${formatted}`);
+  }
+
+  sections.push("Consider these messages when doing your work. If a question was asked of you, address it in your output. If a flag or suggestion was raised, factor it into your approach.");
+
+  return "\n" + sections.join("\n\n") + "\n";
 }

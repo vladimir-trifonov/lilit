@@ -1,6 +1,8 @@
 "use client";
 
-import { useState, useEffect, useRef, useCallback, useMemo } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
+import { useLocalStorageState } from "@/lib/hooks/use-local-storage-state";
+import { SHOW_LOG_KEY, ENHANCED_LOG_KEY } from "@/lib/constants";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -12,10 +14,12 @@ import { EnhancedLogPanel } from "@/components/enhanced-log-panel";
 import { PlanConfirmation } from "@/components/plan-confirmation";
 import { AgentsPanel } from "@/components/agents-panel";
 import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from "@/components/ui/resizable";
-import { parseLogSteps } from "@/lib/log-parser";
+import { usePipeline } from "@/lib/hooks/use-pipeline";
+import { useMessages } from "@/lib/hooks/use-messages";
 import type { StepInfo } from "@/types/pipeline";
 import { StandupThread, type StandupMessageData } from "@/components/standup-thread";
 import { AgentMessageThread, type AgentMessageData } from "@/components/agent-message-thread";
+import { PMQuestionCard } from "@/components/pm-question-card";
 
 interface Project {
   id: string;
@@ -23,307 +27,35 @@ interface Project {
   path: string;
 }
 
-interface Message {
-  id: string;
-  role: string;
-  content: string;
-  metadata?: string;
-  createdAt: string;
-}
-
-interface ResumableRun {
-  runId: string;
-  currentStep: number;
-  totalSteps: number;
-  userMessage: string;
-}
-
 export function Chat({ project }: { project: Project }) {
-  const [messages, setMessages] = useState<Message[]>([]);
-  const [input, setInput] = useState("");
-  const [loading, setLoading] = useState(false);
-  const [currentAgent, setCurrentAgent] = useState<string | null>(null);
-  const [logContent, setLogContent] = useState("");
-  const [showLog, setShowLog] = useState(true);
+  const [showLog, setShowLog] = useLocalStorageState(SHOW_LOG_KEY, true);
   const [showSettings, setShowSettings] = useState(false);
-  const [useEnhancedLog, setUseEnhancedLog] = useState(true);
-  const [currentConversationId, setCurrentConversationId] = useState<string | null>(null);
+  const [useEnhancedLog, setUseEnhancedLog] = useLocalStorageState(ENHANCED_LOG_KEY, true);
   const [showAgents, setShowAgents] = useState(false);
-  const [pendingPlan, setPendingPlan] = useState<{ runId: string; plan: unknown } | null>(null);
-  const [resumableRun, setResumableRun] = useState<ResumableRun | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const logRef = useRef<HTMLPreElement>(null);
-  const logOffsetRef = useRef(0);
-  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const planPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  // Parse pipeline steps from log content
-  const pipelineSteps = useMemo(() => parseLogSteps(logContent), [logContent]);
+  const pipeline = usePipeline(project.id);
 
-  // Check pipeline status on mount (detect running/resumable pipelines)
-  useEffect(() => {
-    let cancelled = false;
+  const { messages, currentConversationId, input, setInput, handleSend } = useMessages({
+    projectId: project.id,
+    onSendStart: pipeline.startRun,
+    onSendEnd: useCallback(() => {
+      pipeline.refetchStatus();
+    }, [pipeline]),
+  });
 
-    async function checkPipelineStatus() {
-      try {
-        const res = await fetch(`/api/pipeline?projectId=${project.id}`);
-        const data = await res.json();
-
-        if (cancelled) return;
-
-        if (data.status === "running" || data.status === "awaiting_plan") {
-          // Reconnect to live pipeline
-          setLoading(true);
-          setCurrentAgent("pipeline");
-          setLogContent("");
-          logOffsetRef.current = 0;
-        } else if (data.status === "aborted" && data.totalSteps > 0) {
-          // Show resume banner
-          setResumableRun({
-            runId: data.runId,
-            currentStep: data.currentStep,
-            totalSteps: data.totalSteps,
-            userMessage: data.userMessage,
-          });
-        }
-      } catch {
-        // ignore
-      }
-    }
-
-    checkPipelineStatus();
-    return () => { cancelled = true; };
-  }, [project.id]);
-
-  useEffect(() => {
-    const loadMessages = async () => {
-      const url = currentConversationId
-        ? `/api/chat?conversationId=${currentConversationId}`
-        : `/api/chat?projectId=${project.id}`;
-
-      const res = await fetch(url);
-      const data = await res.json();
-
-      setMessages(data.messages || []);
-      if (data.conversationId) {
-        setCurrentConversationId(data.conversationId);
-      }
-    };
-
-    loadMessages();
-  }, [project.id, currentConversationId]);
-
+  // Auto-scroll messages (includes loading state so thinking bubble scrolls into view)
   useEffect(() => {
     scrollRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages]);
+  }, [messages, pipeline.loading]);
 
+  // Auto-scroll simple log
   useEffect(() => {
     if (logRef.current) {
       logRef.current.scrollTop = logRef.current.scrollHeight;
     }
-  }, [logContent]);
-
-  // Poll logs while loading (project-scoped)
-  useEffect(() => {
-    if (loading) {
-      pollRef.current = setInterval(async () => {
-        try {
-          const res = await fetch(`/api/logs?projectId=${project.id}&offset=${logOffsetRef.current}`);
-          const data = await res.json();
-          if (data.log) {
-            setLogContent((prev) => prev + data.log);
-            logOffsetRef.current = data.offset;
-          }
-        } catch {
-          // ignore
-        }
-      }, 1500);
-    } else {
-      if (pollRef.current) {
-        clearInterval(pollRef.current);
-        pollRef.current = null;
-      }
-      // One final poll to get remaining logs
-      fetch(`/api/logs?projectId=${project.id}&offset=${logOffsetRef.current}`)
-        .then((r) => r.json())
-        .then((data) => {
-          if (data.log) setLogContent((prev) => prev + data.log);
-        })
-        .catch(() => {});
-    }
-    return () => {
-      if (pollRef.current) clearInterval(pollRef.current);
-    };
-  }, [loading, project.id]);
-
-  // Poll for pending plan while loading (project-scoped)
-  useEffect(() => {
-    if (loading) {
-      planPollRef.current = setInterval(async () => {
-        try {
-          const res = await fetch(`/api/plan?projectId=${project.id}`);
-          const data = await res.json();
-          if (data.status === "pending" && data.plan) {
-            setPendingPlan({ runId: data.runId, plan: data.plan });
-          } else {
-            setPendingPlan(null);
-          }
-        } catch {
-          // ignore
-        }
-      }, 2000);
-    } else {
-      if (planPollRef.current) {
-        clearInterval(planPollRef.current);
-        planPollRef.current = null;
-      }
-      setPendingPlan(null);
-    }
-    return () => {
-      if (planPollRef.current) clearInterval(planPollRef.current);
-    };
-  }, [loading, project.id]);
-
-  const handleAbort = useCallback(async () => {
-    try {
-      setCurrentAgent("stopping...");
-      const res = await fetch("/api/abort", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ projectId: project.id }),
-      });
-      const data = await res.json();
-      if (data.aborted) {
-        setLogContent((prev) => prev + "\n\n🛑 Stop signal sent. Pipeline will abort...\n");
-      }
-    } catch (err) {
-      console.error("Abort failed:", err);
-      setLogContent((prev) => prev + "\n\n❌ Failed to send stop signal\n");
-    }
-  }, [project.id]);
-
-  const handleResume = useCallback(async () => {
-    if (!resumableRun) return;
-    setResumableRun(null);
-    setLoading(true);
-    setCurrentAgent("pipeline");
-    setLogContent("");
-    logOffsetRef.current = 0;
-
-    try {
-      await fetch("/api/pipeline", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          projectId: project.id,
-          action: "resume",
-          runId: resumableRun.runId,
-        }),
-      });
-    } catch {
-      setLoading(false);
-      setCurrentAgent(null);
-    }
-  }, [resumableRun, project.id]);
-
-  const handleRestart = useCallback(async () => {
-    if (!resumableRun) return;
-    setResumableRun(null);
-    setLoading(true);
-    setCurrentAgent("pipeline");
-    setLogContent("");
-    logOffsetRef.current = 0;
-
-    try {
-      await fetch("/api/pipeline", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          projectId: project.id,
-          action: "restart",
-          runId: resumableRun.runId,
-        }),
-      });
-    } catch {
-      setLoading(false);
-      setCurrentAgent(null);
-    }
-  }, [resumableRun, project.id]);
-
-  async function handleSend() {
-    if (!input.trim() || loading) return;
-
-    const userMessage = input.trim();
-    setInput("");
-    setLoading(true);
-    setCurrentAgent("pipeline");
-    setLogContent("");
-    logOffsetRef.current = 0;
-    setResumableRun(null);
-
-    setMessages((prev) => [
-      ...prev,
-      {
-        id: `temp-${Date.now()}`,
-        role: "user",
-        content: userMessage,
-        createdAt: new Date().toISOString(),
-      },
-    ]);
-
-    try {
-      const res = await fetch("/api/chat", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          projectId: project.id,
-          message: userMessage,
-          conversationId: currentConversationId,
-        }),
-      });
-
-      const data = await res.json();
-
-      if (data.error) {
-        setMessages((prev) => [
-          ...prev,
-          {
-            id: `err-${Date.now()}`,
-            role: "system",
-            content: `Error: ${data.error}`,
-            createdAt: new Date().toISOString(),
-          },
-        ]);
-      } else {
-        const newMsg = {
-          id: `asst-${Date.now()}`,
-          role: "assistant",
-          content: data.response,
-          metadata: JSON.stringify({ steps: data.steps, agentMessages: data.agentMessages, adaptations: data.adaptations }),
-          createdAt: new Date().toISOString(),
-        };
-        setMessages((prev) => [...prev, newMsg]);
-
-        // Set conversation ID for cost tracking
-        if (data.conversationId) {
-          setCurrentConversationId(data.conversationId);
-        }
-      }
-    } catch {
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: `err-${Date.now()}`,
-          role: "system",
-          content: "Failed to reach the server",
-          createdAt: new Date().toISOString(),
-        },
-      ]);
-    } finally {
-      setLoading(false);
-      setCurrentAgent(null);
-    }
-  }
+  }, [pipeline.logContent]);
 
   function handleKeyDown(e: React.KeyboardEvent) {
     if (e.key === "Enter" && !e.shiftKey) {
@@ -335,9 +67,9 @@ export function Chat({ project }: { project: Project }) {
   return (
     <>
       {/* Header */}
-      <div className="h-14 border-b border-border flex items-center px-4 gap-3">
-        <h2 className="font-medium">{project.name}</h2>
-        <span className="text-xs text-muted-foreground">{project.path}</span>
+      <div className="h-14 glass-subtle flex items-center px-4 gap-3 z-20">
+        <h2 className="font-medium text-foreground">{project.name}</h2>
+        <span className="text-xs text-muted-foreground font-mono">{project.path}</span>
         {/* Project-level cost (always shown) */}
         <CostDisplay projectId={project.id} compact className="ml-4" />
         <div className="ml-auto flex items-center gap-2">
@@ -345,7 +77,7 @@ export function Chat({ project }: { project: Project }) {
             variant="ghost"
             size="sm"
             onClick={() => setShowAgents(true)}
-            className="text-xs text-zinc-400"
+            className="text-xs text-muted-foreground hover:text-foreground"
           >
             🤖 Agents
           </Button>
@@ -353,25 +85,25 @@ export function Chat({ project }: { project: Project }) {
             variant="ghost"
             size="sm"
             onClick={() => setShowSettings(true)}
-            className="text-xs text-zinc-400"
+            className="text-xs text-muted-foreground hover:text-foreground"
           >
             ⚙️ Settings
           </Button>
-          {(loading || logContent) && (
+          {(pipeline.loading || pipeline.logContent) && (
             <Button
               variant="ghost"
               size="sm"
               onClick={() => setShowLog(!showLog)}
-              className="text-xs text-zinc-400"
+              className="text-xs text-muted-foreground hover:text-foreground"
             >
               {showLog ? "Hide" : "Show"} Log
             </Button>
           )}
-          {loading && (
+          {pipeline.loading && (
             <Button
               variant="destructive"
               size="sm"
-              onClick={handleAbort}
+              onClick={pipeline.abort}
               className="text-xs"
             >
               ■ Stop
@@ -381,40 +113,43 @@ export function Chat({ project }: { project: Project }) {
       </div>
 
       {/* Main content area */}
-      <div className="flex-1 min-h-0 h-full overflow-hidden">
+      <div className="flex-1 min-h-0 h-full overflow-hidden bg-background">
         <ResizablePanelGroup orientation="horizontal">
-          <ResizablePanel defaultSize={showLog && (loading || logContent) ? 60 : 100} minSize={30}>
+          <ResizablePanel defaultSize={showLog && (pipeline.loading || pipeline.logContent) ? 60 : 100} minSize={30}>
             {/* Messages */}
             <ScrollArea className="h-full w-full">
-              <div className="max-w-3xl mx-auto space-y-4 p-4">
-                {messages.length === 0 && !loading && !resumableRun && (
-                  <div className="text-center text-muted-foreground py-20">
-                    <p className="text-lg mb-1">Start building</p>
-                    <p className="text-sm">Tell Lilit what to build.</p>
+              <div className="max-w-3xl mx-auto space-y-6 p-6">
+                {messages.length === 0 && !pipeline.loading && !pipeline.resumableRun && (
+                  <div className="text-center text-muted-foreground py-20 animate-fade-in-up">
+                    <div className="w-16 h-16 rounded-full bg-brand/5 mx-auto mb-4 flex items-center justify-center">
+                       <span className="text-2xl">✨</span>
+                    </div>
+                    <p className="text-lg font-medium text-foreground mb-1">Start building</p>
+                    <p className="text-sm">Tell Lilit what to build. I&apos;m ready.</p>
                   </div>
                 )}
 
                 {/* Resume banner */}
-                {resumableRun && !loading && (
-                  <div className="bg-yellow-500/10 border border-yellow-500/30 rounded-xl p-4 space-y-3">
+                {pipeline.resumableRun && !pipeline.loading && (
+                  <div className="bg-warning-soft border border-warning/30 rounded-xl p-4 space-y-3 animate-fade-in">
                     <div className="flex items-center gap-2">
-                      <span className="text-sm font-medium text-yellow-400">Pipeline stopped</span>
-                      <Badge variant="outline" className="text-[10px] border-yellow-500/50 text-yellow-400">
-                        Step {resumableRun.currentStep}/{resumableRun.totalSteps}
+                      <span className="text-sm font-medium text-warning">Pipeline stopped</span>
+                      <Badge variant="outline" className="text-[10px] border-warning/50 text-warning">
+                        Step {pipeline.resumableRun.currentStep}/{pipeline.resumableRun.totalSteps}
                       </Badge>
                     </div>
                     <p className="text-xs text-muted-foreground truncate">
-                      {resumableRun.userMessage}
+                      {pipeline.resumableRun.userMessage}
                     </p>
                     <div className="flex items-center gap-2">
-                      <Button onClick={handleResume} size="sm" className="text-xs">
+                      <Button onClick={pipeline.resume} size="sm" className="text-xs shadow-sm">
                         Resume
                       </Button>
-                      <Button onClick={handleRestart} variant="outline" size="sm" className="text-xs">
+                      <Button onClick={pipeline.restart} variant="outline" size="sm" className="text-xs bg-transparent">
                         Restart
                       </Button>
                       <Button
-                        onClick={() => setResumableRun(null)}
+                        onClick={pipeline.dismissResumable}
                         variant="ghost"
                         size="sm"
                         className="text-xs text-muted-foreground"
@@ -429,23 +164,32 @@ export function Chat({ project }: { project: Project }) {
                   <MessageBubble key={msg.id} message={msg} />
                 ))}
 
-                {loading && (
-                  <div className="space-y-3 py-2">
-                    <div className="flex items-center gap-2 text-zinc-500 text-sm">
-                      <span className="animate-spin">⟳</span>
-                      <span>Pipeline running...</span>
+                {pipeline.loading && (
+                  <div className="space-y-4 py-2 animate-fade-in">
+                    <div className="flex items-center gap-3 text-brand text-sm px-4">
+                      <span className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent" />
+                      <span className="font-medium animate-pulse">Lilit is working...</span>
                     </div>
-                    {pipelineSteps.length > 0 && (
-                      <PipelineSteps steps={pipelineSteps} className="ml-6" />
+                    {(pipeline.pipelineSteps.length > 0 || pipeline.tasks.length > 0) && (
+                      <PipelineSteps steps={pipeline.pipelineSteps} tasks={pipeline.tasks} className="ml-6" />
                     )}
-                    {pendingPlan && (
+                    {pipeline.pendingPlan && (
                       <div className="ml-6">
                         <PlanConfirmation
                           projectId={project.id}
-                          runId={pendingPlan.runId}
-                          plan={pendingPlan.plan as { analysis: string; needsArchitect: boolean; tasks: { id: number; title: string; description: string; agent: string; role: string; acceptanceCriteria?: string[]; provider?: string; model?: string }[]; pipeline: string[] }}
-                          onConfirmed={() => setPendingPlan(null)}
-                          onRejected={() => setPendingPlan(null)}
+                          runId={pipeline.pendingPlan.runId}
+                          plan={pipeline.pendingPlan.plan as { analysis: string; tasks: { id: number; title: string; description: string; agent: string; role: string; acceptanceCriteria?: string[]; provider?: string; model?: string }[]; pipeline: string[] }}
+                          onConfirmed={pipeline.clearPendingPlan}
+                          onRejected={pipeline.clearPendingPlan}
+                        />
+                      </div>
+                    )}
+                    {pipeline.pendingQuestion && (
+                      <div className="ml-6">
+                        <PMQuestionCard
+                          question={pipeline.pendingQuestion.question}
+                          context={pipeline.pendingQuestion.context}
+                          onAnswer={pipeline.answerQuestion}
                         />
                       </div>
                     )}
@@ -465,20 +209,29 @@ export function Chat({ project }: { project: Project }) {
             </ScrollArea>
           </ResizablePanel>
 
-          {showLog && (loading || logContent) && (
+          {showLog && (pipeline.loading || pipeline.logContent) && (
             <>
               <ResizableHandle withHandle />
               <ResizablePanel defaultSize={40} minSize={20}>
                 {/* Log panel (right side) — polls /api/logs */}
-                <div className="flex flex-col h-full min-h-0">
-                  <div className="h-10 border-b border-border flex items-center px-3 gap-2 shrink-0 bg-background/50 backdrop-blur-sm z-10">
-                    <span className="text-xs font-medium text-muted-foreground">📋 Agent Output</span>
-                    {currentAgent && (
-                      <Badge variant="secondary" className="text-[10px] px-1.5 py-0">
-                        {currentAgent}
+                <div className="flex flex-col h-full min-h-0 bg-background/50">
+                  <div className="h-10 glass-subtle flex items-center px-3 gap-2 shrink-0 z-10 border-b border-border-subtle">
+                    <span className="text-xs font-medium text-muted-foreground">📋 Activity Log</span>
+                    {pipeline.currentAgent && (
+                      <Badge variant="secondary" className="text-[10px] px-1.5 py-0 bg-brand-soft/50 text-brand-foreground animate-pulse">
+                        {pipeline.currentAgent}
                       </Badge>
                     )}
                     <div className="ml-auto flex items-center gap-2">
+                       {pipeline.loading && (
+                        <div className="flex items-center gap-1.5">
+                           <span className="relative flex h-2 w-2">
+                              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-brand opacity-75"></span>
+                              <span className="relative inline-flex rounded-full h-2 w-2 bg-brand"></span>
+                            </span>
+                            <span className="text-[10px] text-brand font-medium">LIVE</span>
+                        </div>
+                      )}
                       <Button
                         onClick={() => setUseEnhancedLog(!useEnhancedLog)}
                         variant="ghost"
@@ -488,26 +241,23 @@ export function Chat({ project }: { project: Project }) {
                       >
                         {useEnhancedLog ? "Simple" : "Enhanced"}
                       </Button>
-                      {loading && (
-                        <span className="text-[10px] text-zinc-600 animate-pulse">live</span>
-                      )}
                     </div>
                   </div>
 
                   {useEnhancedLog ? (
                     <div className="flex-1 min-h-0 overflow-hidden">
                       <EnhancedLogPanel
-                        logContent={logContent}
-                        loading={loading}
-                        currentAgent={currentAgent}
+                        logContent={pipeline.logContent}
+                        loading={pipeline.loading}
+                        currentAgent={pipeline.currentAgent}
                       />
                     </div>
                   ) : (
                     <pre
                       ref={logRef}
-                      className="flex-1 p-3 text-xs text-muted-foreground font-mono overflow-auto bg-muted/10 whitespace-pre-wrap break-words min-h-0"
+                      className="flex-1 p-3 text-xs text-muted-foreground font-mono overflow-auto bg-black/20 whitespace-pre-wrap break-words min-h-0"
                     >
-                      {logContent || "Waiting for output..."}
+                      {pipeline.logContent || "Waiting for output..."}
                     </pre>
                   )}
                 </div>
@@ -518,21 +268,21 @@ export function Chat({ project }: { project: Project }) {
       </div>
 
       {/* Input */}
-      <div className="border-t border-border p-4">
-        <div className="max-w-3xl mx-auto flex gap-2">
+      <div className="glass-raised border-t border-border/50 p-4 z-20">
+        <div className="max-w-3xl mx-auto flex gap-3">
           <Textarea
-            placeholder="Tell Lilit what to build..."
+            placeholder={pipeline.loading ? "Send a message to the running pipeline..." : "Tell Lilit what to build..."}
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
             rows={1}
-            className="bg-muted/30 border-input resize-none min-h-[44px]"
-            disabled={loading}
+            className="bg-surface/50 border-border resize-none min-h-[44px] shadow-inner focus:bg-surface transition-all"
           />
           <Button
             onClick={handleSend}
-            disabled={loading || !input.trim()}
-            className="self-end"
+            disabled={!input.trim()}
+            className="self-end shadow-md hover:shadow-lg transition-all"
+            size="lg"
           >
             Send
           </Button>
@@ -571,6 +321,14 @@ function formatMessageTime(dateStr: string): string {
   return `${date.toLocaleDateString([], { month: "short", day: "numeric" })} ${time}`;
 }
 
+interface Message {
+  id: string;
+  role: string;
+  content: string;
+  metadata?: string;
+  createdAt: string;
+}
+
 function MessageBubble({ message }: { message: Message }) {
   const isUser = message.role === "user";
   const isSystem = message.role === "system";
@@ -579,6 +337,7 @@ function MessageBubble({ message }: { message: Message }) {
   let standupMessages: StandupMessageData[] = [];
   let agentMessages: AgentMessageData[] = [];
   let adaptations: Array<{ afterStep: number; reason?: string; addedSteps?: string[]; removedSteps?: number[]; costUsd: number }> = [];
+  let debates: Array<{ challengerAgent: string; defenderAgent: string; triggerOpinion: string; outcome: string; turnCount: number; resolutionNote?: string }> = [];
   if (message.metadata) {
     try {
       const meta = JSON.parse(message.metadata);
@@ -586,59 +345,69 @@ function MessageBubble({ message }: { message: Message }) {
       standupMessages = meta.standup?.messages || [];
       agentMessages = meta.agentMessages || [];
       adaptations = meta.adaptations || [];
+      debates = meta.debates || [];
     } catch {
       // ignore
     }
   }
 
   return (
-    <div className={`flex ${isUser ? "justify-end" : "justify-start"}`}>
+    <div className={`flex ${isUser ? "justify-end" : "justify-start"} animate-fade-in-up`}>
       <div
-        className={`max-w-[85%] rounded-xl px-4 py-3 ${
+        className={`max-w-[85%] rounded-xl px-5 py-4 shadow-sm ${
           isUser
-            ? "bg-primary text-primary-foreground shadow-sm"
+            ? "bg-brand text-white shadow-brand/10 rounded-br-none"
             : isSystem
-              ? "bg-destructive/10 text-destructive border border-destructive/20"
-              : "bg-surface text-surface-foreground border border-border/50"
+              ? "bg-destructive-soft text-destructive border border-destructive/20"
+              : "glass text-foreground border border-border-subtle rounded-bl-none"
         }`}
       >
-        <div className="flex items-center gap-2 mb-1">
+        <div className="flex items-center gap-2 mb-2">
           {!isUser && !isSystem && (
-            <span className="text-xs text-muted-foreground font-medium">Lilit</span>
+            <div className="flex items-center gap-2">
+               <div className="w-4 h-4 rounded-full bg-brand flex items-center justify-center">
+                  <span className="text-[10px] text-white">L</span>
+               </div>
+               <span className="text-xs font-semibold text-foreground">Lilit</span>
+            </div>
           )}
-          <span className={`text-[10px] ${isUser ? "text-primary-foreground/60" : "text-muted-foreground/60"} ml-auto`}>
+          <span className={`text-[10px] ${isUser ? "text-white/70" : "text-muted-foreground"} ml-auto`}>
             {formatMessageTime(message.createdAt)}
           </span>
         </div>
-        <div className="text-sm whitespace-pre-wrap break-words">{message.content}</div>
+        <div className={`text-sm whitespace-pre-wrap break-words leading-relaxed ${isUser ? "text-white" : ""}`}>{message.content}</div>
 
         {steps.length > 0 && (
-          <div className="mt-3 pt-2 border-t border-zinc-700 space-y-1">
-            <div className="text-xs text-zinc-500 font-medium">Pipeline:</div>
+          <div className="mt-4 pt-3 border-t border-border-subtle space-y-2">
+            <div className="text-xs text-muted-foreground font-medium uppercase tracking-wider">Pipeline Checklist:</div>
             {steps.map((s, i) => (
-              <div key={i} className="flex items-center gap-2 text-xs">
+              <div key={i} className="flex items-center gap-2 text-xs group">
                 <Badge
-                  variant={s.status === "done" ? "default" : "destructive"}
-                  className="text-[10px] px-1.5 py-0"
+                  variant={s.status === "done" ? "default" : "secondary"}
+                  className={`text-[9px] px-1.5 py-0 h-4 ${s.status === 'done' ? 'bg-success-soft text-success' : 'bg-surface-raised text-muted-foreground'}`}
                 >
                   {s.role ? `${s.agent}:${s.role}` : s.agent}
                 </Badge>
-                <span className="text-zinc-400">{s.title}</span>
-                <span>{s.status === "done" ? "✅" : "❌"}</span>
+                <span className={`transition-colors ${s.status === 'done' ? 'text-muted-foreground line-through decoration-border' : 'text-foreground'}`}>
+                   {s.title}
+                </span>
+                <span className="ml-auto opacity-0 group-hover:opacity-100 transition-opacity">
+                   {s.status === "done" ? "✅" : "⏳"}
+                </span>
               </div>
             ))}
           </div>
         )}
 
         {adaptations.length > 0 && (
-          <div className="mt-3 pt-2 border-t border-zinc-700 space-y-1">
-            <div className="text-xs text-zinc-500 font-medium">Pipeline Adaptations:</div>
+          <div className="mt-4 pt-3 border-t border-border-subtle space-y-2">
+            <div className="text-xs text-muted-foreground font-medium uppercase tracking-wider">Pipeline Adaptations:</div>
             {adaptations.map((a, i) => (
-              <div key={i} className="flex items-start gap-2 text-xs">
-                <Badge variant="outline" className="text-[10px] px-1.5 py-0 bg-amber-500/10 text-amber-700 border-amber-500/20 shrink-0">
-                  after step {a.afterStep + 1}
+              <div key={i} className="flex items-start gap-2 text-xs bg-warning-soft/30 p-2 rounded-md">
+                <Badge variant="outline" className="text-[9px] px-1.5 py-0 bg-warning-soft text-warning border-warning/20 shrink-0">
+                  Step {a.afterStep + 1}
                 </Badge>
-                <span className="text-zinc-400">
+                <span className="text-muted-foreground">
                   {a.reason ?? "Pipeline modified"}
                   {a.addedSteps && a.addedSteps.length > 0 && ` (+${a.addedSteps.join(", ")})`}
                 </span>
@@ -647,14 +416,31 @@ function MessageBubble({ message }: { message: Message }) {
           </div>
         )}
 
+        {debates.length > 0 && (
+          <div className="mt-4 pt-3 border-t border-border-subtle space-y-2">
+            <div className="text-xs text-destructive font-medium uppercase tracking-wider">Debates:</div>
+            {debates.map((d, i) => (
+              <div key={i} className="flex items-start gap-2 text-xs bg-destructive-soft/30 p-2 rounded-md">
+                <Badge variant="outline" className="text-[9px] px-1.5 py-0 bg-destructive-soft text-destructive border-destructive/20 shrink-0">
+                  {d.outcome}
+                </Badge>
+                <span className="text-muted-foreground">
+                  {d.challengerAgent} vs {d.defenderAgent}: {d.triggerOpinion.slice(0, 100)}
+                  {d.resolutionNote && <span className="text-faint"> &mdash; {d.resolutionNote.slice(0, 80)}</span>}
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
+
         {agentMessages.length > 0 && (
-          <div className="mt-3 pt-2 border-t border-zinc-700">
+          <div className="mt-4 pt-3 border-t border-border-subtle">
             <AgentMessageThread messages={agentMessages} />
           </div>
         )}
 
         {standupMessages.length > 0 && (
-          <div className="mt-3 pt-2 border-t border-zinc-700">
+          <div className="mt-4 pt-3 border-t border-border-subtle">
             <StandupThread messages={standupMessages} />
           </div>
         )}

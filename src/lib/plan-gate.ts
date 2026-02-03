@@ -5,20 +5,20 @@
 
 import fs from "fs";
 import path from "path";
-import os from "os";
-
-function getProjectDir(projectId: string): string {
-  const dir = path.join(os.tmpdir(), "lilit", projectId);
-  fs.mkdirSync(dir, { recursive: true });
-  return dir;
-}
+import {
+  PLAN_FILE_PREFIX,
+  PLAN_CONFIRM_PREFIX,
+  PLAN_CONFIRMATION_TIMEOUT_MS,
+  PLAN_POLL_INTERVAL_MS,
+} from "@/lib/constants";
+import { getProjectDir } from "@/lib/claude-code";
 
 function planFilePath(projectId: string, runId: string) {
-  return path.join(getProjectDir(projectId), `plan-${runId}.json`);
+  return path.join(getProjectDir(projectId), `${PLAN_FILE_PREFIX}${runId}.json`);
 }
 
 function confirmFilePath(projectId: string, runId: string) {
-  return path.join(getProjectDir(projectId), `plan-confirm-${runId}.json`);
+  return path.join(getProjectDir(projectId), `${PLAN_CONFIRM_PREFIX}${runId}.json`);
 }
 
 export interface PlanConfirmation {
@@ -68,8 +68,8 @@ export async function waitForConfirmation(
     abortCheck?: () => boolean;
   }
 ): Promise<PlanConfirmation> {
-  const timeout = opts?.timeoutMs ?? 600_000; // 10 min
-  const interval = opts?.pollIntervalMs ?? 1000;
+  const timeout = opts?.timeoutMs ?? PLAN_CONFIRMATION_TIMEOUT_MS;
+  const interval = opts?.pollIntervalMs ?? PLAN_POLL_INTERVAL_MS;
   const abortCheck = opts?.abortCheck ?? (() => false);
   const start = Date.now();
   const filePath = confirmFilePath(projectId, runId);
@@ -117,14 +117,14 @@ export function cleanupPlanFiles(projectId: string, runId: string) {
 export function findPendingPlan(projectId: string): { runId: string; plan: unknown } | null {
   try {
     const dir = getProjectDir(projectId);
-    const files = fs.readdirSync(dir).filter((f) => f.startsWith("plan-") && f.endsWith(".json") && !f.includes("confirm"));
+    const files = fs.readdirSync(dir).filter((f) => f.startsWith(PLAN_FILE_PREFIX) && f.endsWith(".json") && !f.includes("confirm"));
 
     for (const file of files) {
       const filePath = path.join(dir, file);
       try {
         const data = JSON.parse(fs.readFileSync(filePath, "utf-8"));
         if (data.status === "pending") {
-          const runId = file.replace("plan-", "").replace(".json", "");
+          const runId = file.replace(PLAN_FILE_PREFIX, "").replace(".json", "");
           return { runId, plan: data.plan };
         }
       } catch {
