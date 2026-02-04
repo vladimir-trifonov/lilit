@@ -128,6 +128,7 @@ export async function detectStack(projectPath: string): Promise<string | null> {
       prompt,
       systemPrompt: "You are a tech stack identifier. You respond with only the stack name, nothing else.",
       model,
+      cwd: projectPath,
       maxTokens: 32,
     });
 

@@ -25,7 +25,13 @@ export {
   getProviderForModel,
   canFallbackTo,
   getCheapestAvailableModel,
+  getBestAvailableModel,
+  registerProvider,
+  registerProviders,
 } from "./registry";
+
+// Bootstrap (register built-in adapters)
+export { registerBuiltinProviders } from "./bootstrap";
 
 // Model constants (re-export from models.ts for backward compat)
 export {

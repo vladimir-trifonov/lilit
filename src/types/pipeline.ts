@@ -51,6 +51,19 @@ export interface DbTask {
   completedAt: string | null;
 }
 
+export interface PipelineTaskView {
+  id: string;
+  title: string;
+  description: string;
+  agent: string;
+  role?: string;
+  status: string;
+  dependsOn: string[];
+  acceptanceCriteria: string[];
+  outputSummary: string | null;
+  order: number;
+}
+
 /** Shape returned by GET /api/pipeline `pastRuns` array (summary only — no tasks) */
 export interface PastRun {
   runId: string;
@@ -67,6 +80,8 @@ export interface PastRun {
   logContent?: string | null;
   /** Tasks for this run, lazy-loaded via /api/pipeline/[runId] */
   tasks?: DbTask[];
+  /** View model for pipeline tasks, lazy-loaded via /api/pipeline/[runId] */
+  pipelineView?: PipelineTaskView[];
   /** UI state: whether this run is expanded in the activity log */
   expanded?: boolean;
   /** UI state: whether logContent is currently being fetched */

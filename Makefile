@@ -12,11 +12,6 @@ dev:
 stop:
 	docker compose down
 
-db-reset:
-	docker compose down -v
-	docker compose up -d --wait
-	npx prisma migrate deploy
-
 build:
 	npm run build
 
@@ -31,8 +26,6 @@ typecheck:
 
 clean:
 	docker compose down -v
-	docker compose up -d --wait
-	npx prisma migrate deploy
 	rm -rf /tmp/lilit
 	rm -rf .next
 

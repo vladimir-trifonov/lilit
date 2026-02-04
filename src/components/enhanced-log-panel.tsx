@@ -68,7 +68,7 @@ function DataBlock({ plainText, formatted, searchQuery }: { plainText: string | 
   const isLong = displayText.split("\n").length > 6;
 
   return (
-    <div className="my-1.5 rounded-md border border-border-subtle bg-black/30 overflow-hidden">
+    <div className="my-1.5 rounded-md border border-border-subtle overflow-hidden">
       <div className="flex items-center gap-2 px-2 py-1">
         <span className="text-[10px] text-brand font-mono font-medium">{showJson ? "JSON" : "DATA"}</span>
         {plainText && (
@@ -165,7 +165,7 @@ export function EnhancedLogPanel({ logContent, loading }: EnhancedLogPanelProps)
   }
 
   return (
-    <div className="flex flex-col bg-black/20">
+    <div className="flex flex-col">
       {/* Toolbar */}
       <div className="flex items-center gap-2 p-2 border-b border-border-subtle shrink-0 glass-subtle">
         <div className="relative flex-1">
@@ -229,12 +229,7 @@ export function EnhancedLogPanel({ logContent, loading }: EnhancedLogPanelProps)
             <div className="text-muted-foreground/50 text-xs whitespace-pre-wrap">
               {logContent}
             </div>
-          ) : (
-            <div className="flex items-center justify-center py-8 text-muted-foreground/50 text-xs">
-              <span className="inline-block h-3.5 w-3.5 animate-spin rounded-full border-2 border-brand border-t-transparent mr-2" />
-              Waiting for output...
-            </div>
-          )
+          ) : null
         ) : (
           <div className="space-y-2">
             {filteredSections.map((section, index) => {
@@ -290,7 +285,7 @@ export function EnhancedLogPanel({ logContent, loading }: EnhancedLogPanelProps)
 
                   {/* Section Content */}
                   {!isCollapsed && (
-                    <div className="p-3 border-t border-border-subtle bg-black/20 overflow-x-auto">
+                    <div className="p-3 border-t border-border-subtle overflow-x-auto">
                       <div className="text-[11px] leading-relaxed text-muted-foreground/90 space-y-0.5">
                         {chunkLines(section.content.split("\n")).map((chunk, chunkIdx) => {
                           if (chunk.type === "json") {

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useEffect, useCallback } from "react";
+import { useRef, useEffect, useCallback } from "react";
 import { createPortal } from "react-dom";
 import { Rnd } from "react-rnd";
 import { Badge } from "@/components/ui/badge";
@@ -77,51 +77,44 @@ function formatRelativeTime(dateStr: string): string {
 
 export function TeamChatWindow({ pipelineRunId, pipelineLoading }: TeamChatWindowProps) {
   const [windowState, setWindowState] = useLocalStorageState<WindowState>(TEAM_CHAT_STATE_KEY, DEFAULT_STATE);
-  const [prevRunId, setPrevRunId] = useState<string | null>(null);
-  const [prevMessageCount, setPrevMessageCount] = useState(0);
+  const prevRunIdRef = useRef<string | null>(null);
   const scrollEndRef = useRef<HTMLDivElement>(null);
-  const [hasUnread, setHasUnread] = useState(false);
-  const [isMounted, setIsMounted] = useState(false);
+  const autoExpandArmedRef = useRef(false);
+  const isMounted = typeof window !== "undefined";
 
-  const { messages, hasMore, loadingMore, loadOlderMessages } = useAgentMessages(pipelineRunId, pipelineLoading);
+  const { messages, unread, hasMore, loadingMore, loadOlderMessages, markRead } = useAgentMessages(pipelineRunId, pipelineLoading);
   const topSentinelRef = useRef<HTMLDivElement>(null);
   const messageContainerRef = useRef<HTMLDivElement>(null);
 
-  // Ensure portal only renders on client
-  useEffect(() => {
-    setIsMounted(true);
-  }, []);
-
   // Reset state when pipeline run changes
-  if (pipelineRunId !== prevRunId) {
-    setPrevRunId(pipelineRunId);
-    setPrevMessageCount(0);
-    setHasUnread(false);
-  }
-
-  // Track unread when minimized
-  if (messages.length > prevMessageCount) {
-    if (windowState.minimized) {
-      setHasUnread(true);
-    }
-    setPrevMessageCount(messages.length);
-  }
-
-  // Auto-expand when first message arrives during a pipeline run
-  const shouldAutoExpand = messages.length > 0 && windowState.minimized && pipelineLoading && prevMessageCount <= 1;
   useEffect(() => {
-    if (shouldAutoExpand) {
-      setWindowState((prev) => ({ ...prev, minimized: false }));
-      setHasUnread(false);
+    if (pipelineRunId !== prevRunIdRef.current) {
+      prevRunIdRef.current = pipelineRunId;
+      autoExpandArmedRef.current = true;
     }
-  }, [shouldAutoExpand, setWindowState]);
+  }, [pipelineRunId]);
+
+  // Auto-expand once per run when first message arrives
+  useEffect(() => {
+    if (
+      autoExpandArmedRef.current &&
+      windowState.minimized &&
+      pipelineLoading &&
+      messages.length > 0
+    ) {
+      autoExpandArmedRef.current = false;
+      setWindowState((prev) => ({ ...prev, minimized: false }));
+      markRead();
+    }
+  }, [messages.length, pipelineLoading, windowState.minimized, setWindowState, markRead]);
 
   // Auto-scroll on new messages
   useEffect(() => {
     if (!windowState.minimized) {
       scrollEndRef.current?.scrollIntoView({ behavior: "smooth" });
+      markRead();
     }
-  }, [messages.length, windowState.minimized]);
+  }, [messages.length, windowState.minimized, markRead]);
 
   // Upward infinite scroll for older messages
   useEffect(() => {
@@ -163,12 +156,12 @@ export function TeamChatWindow({ pipelineRunId, pipelineLoading }: TeamChatWindo
 
   const handleExpand = useCallback(() => {
     setWindowState((prev) => ({ ...prev, minimized: false }));
-    setHasUnread(false);
-  }, [setWindowState]);
+    markRead();
+  }, [setWindowState, markRead]);
 
   // Minimized pill
   if (windowState.minimized) {
-    const circleColor = hasUnread
+    const circleColor = unread
       ? "bg-brand"
       : pipelineLoading
         ? "bg-success"
@@ -180,7 +173,7 @@ export function TeamChatWindow({ pipelineRunId, pipelineLoading }: TeamChatWindo
         className="fixed bottom-6 right-6 z-[60] flex items-center gap-2 px-4 py-2 bg-surface-raised border border-border rounded-full shadow-lg shadow-black/10 hover:shadow-xl transition-shadow cursor-pointer"
       >
         <span className="relative flex h-2.5 w-2.5">
-          {hasUnread && (
+          {unread && (
             <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-brand opacity-75" />
           )}
           <span className={`relative inline-flex rounded-full h-2.5 w-2.5 transition-colors duration-300 ${circleColor}`} />

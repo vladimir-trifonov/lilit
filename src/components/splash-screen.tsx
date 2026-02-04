@@ -15,22 +15,7 @@ export function SplashScreen({ onComplete }: { onComplete: () => void }) {
   const [exiting, setExiting] = useState(false);
   const [videoSrc, setVideoSrc] = useState<string | null>(null);
   const [videoReady, setVideoReady] = useState(false);
-  const [agents, setAgents] = useState<{ name: string; role: string }[]>([]);
   const videoRef = useRef<HTMLVideoElement>(null);
-
-  useEffect(() => {
-    apiFetch("/api/agents")
-      .then((r) => r.json())
-      .then((data: { agents: Record<string, { name: string; type: string; personality?: { codename?: string } }> }) => {
-        setAgents(
-          Object.values(data.agents).map((a) => ({
-            name: a.personality?.codename ?? a.name,
-            role: a.name,
-          }))
-        );
-      })
-      .catch(() => {});
-  }, []);
 
   useEffect(() => {
     apiFetch("/api/splash-videos")

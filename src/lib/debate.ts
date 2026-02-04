@@ -248,9 +248,10 @@ export async function runDebateRound(opts: {
   conflict: OpinionConflict;
   pipelineRunId: string;
   projectId: string;
+  cwd: string;
   stepIndex: number;
 }): Promise<DebateRoundResult> {
-  const { conflict, pipelineRunId, projectId, stepIndex } = opts;
+  const { conflict, pipelineRunId, projectId, cwd, stepIndex } = opts;
   const debateId = `debate-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   const turns: DebateTurn[] = [];
   let totalCost = 0;
@@ -269,6 +270,7 @@ export async function runDebateRound(opts: {
     prompt: challengePrompt,
     systemPrompt: "You are an opinionated software professional in a team debate. Be direct and specific. Output ONLY a JSON object.",
     model,
+    cwd,
     maxTokens: DEBATE_TURN_MAX_TOKENS,
     agentLabel: `debate:${conflict.challengerAgent}`,
   });
@@ -293,6 +295,7 @@ export async function runDebateRound(opts: {
       prompt: counterPrompt,
       systemPrompt: "You are defending your work in a team debate. Be honest — concede if the criticism is valid. Output ONLY a JSON object.",
       model,
+      cwd,
       maxTokens: DEBATE_TURN_MAX_TOKENS,
       agentLabel: `debate:${conflict.defenderAgent}`,
     });
@@ -319,6 +322,7 @@ export async function runDebateRound(opts: {
         prompt: moderatePrompt,
         systemPrompt: "You are the PM moderating a team debate. Make a binding decision. Output ONLY a JSON object.",
         model,
+        cwd,
         maxTokens: DEBATE_TURN_MAX_TOKENS,
         agentLabel: "debate:pm-moderate",
       });

@@ -359,6 +359,7 @@ export async function runAgent(opts: {
 export async function generateSummary(
   userMessage: string,
   steps: { agent: string; role?: string; title: string; status: string; output: string }[],
+  cwd: string,
 ): Promise<string> {
   const stepsSummary = steps
     .map((s) => {
@@ -384,6 +385,7 @@ ${stepsSummary}`;
     systemPrompt:
       "You are a technical writer. Summarize development work clearly and concisely. Output ONLY the summary text, no code changes.",
     model: summaryModel.model,
+    cwd,
     agentLabel: "summary",
   });
 

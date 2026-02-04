@@ -3,7 +3,6 @@ name: Architect
 type: architect
 description: "Makes high-level technical decisions for projects"
 provider: claude-code
-model: haiku
 capabilities:
   - file-access
   - shell-access

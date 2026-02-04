@@ -30,6 +30,7 @@ export default function RootLayout({
         )}
       </head>
       <body
+        suppressHydrationWarning
         className={`${geistSans.variable} ${geistMono.variable} antialiased min-h-screen bg-background text-foreground overflow-hidden selection:bg-brand selection:text-white`}
       >
         {/* Global Background Ambience */}

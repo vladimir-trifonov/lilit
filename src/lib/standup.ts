@@ -82,6 +82,7 @@ interface DebateInfo {
 interface GenerateStandupOpts {
   pipelineRunId: string;
   projectId: string;
+  cwd: string;
   userMessage: string;
   steps: StepInfo[];
   plan: PlanInfo;
@@ -362,6 +363,7 @@ export async function generateStandup(
   const {
     pipelineRunId,
     projectId,
+    cwd,
     userMessage,
     steps,
     fixCycleCount,
@@ -421,6 +423,7 @@ export async function generateStandup(
           prompt,
           systemPrompt,
           model,
+          cwd,
           maxTokens: STANDUP_MAX_TOKENS,
           agentLabel: `standup:${participant.agent}`,
         });

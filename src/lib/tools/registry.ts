@@ -4,30 +4,7 @@
  */
 
 import type { ToolDefinition } from "./definitions";
-import {
-  TOOL_SEARCH_PROJECT_HISTORY,
-  TOOL_LIST_TASKS,
-  TOOL_GET_TASK,
-  TOOL_UPDATE_TASK_STATUS,
-  TOOL_GET_MESSAGES,
-  TOOL_GET_STEP_OUTPUT,
-  TOOL_GET_INBOX,
-  TOOL_GET_PIPELINE_RUNS,
-  TOOL_GET_PROJECT_INFO,
-  TOOL_UPDATE_PROJECT_STACK,
-} from "./definitions";
-import {
-  searchProjectHistory,
-  listTasks,
-  getTask,
-  updateTaskStatus,
-  getMessages,
-  getStepOutput,
-  getInbox,
-  getPipelineRuns,
-  getProjectInfo,
-  updateProjectStack,
-} from "./implementations";
+import { registerBuiltinTools } from "./bootstrap";
 
 export type ToolExecuteFn = (projectId: string, params: Record<string, unknown>) => Promise<unknown>;
 
@@ -36,54 +13,25 @@ export interface ToolEntry {
   execute: ToolExecuteFn;
 }
 
-// Wrap typed implementations to accept Record<string, unknown> params
-function wrap<P>(fn: (projectId: string, params: P) => Promise<unknown>): ToolExecuteFn {
-  return (projectId, params) => fn(projectId, params as P);
+const TOOL_REGISTRY: Record<string, ToolEntry> = {};
+let builtinsRegistered = false;
+
+export function registerTool(name: string, entry: ToolEntry): void {
+  if (TOOL_REGISTRY[name]) return;
+  TOOL_REGISTRY[name] = entry;
 }
 
-/** Complete tool registry */
-export const TOOL_REGISTRY: Record<string, ToolEntry> = {
-  search_project_history: {
-    definition: TOOL_SEARCH_PROJECT_HISTORY,
-    execute: wrap(searchProjectHistory),
-  },
-  list_tasks: {
-    definition: TOOL_LIST_TASKS,
-    execute: wrap(listTasks),
-  },
-  get_task: {
-    definition: TOOL_GET_TASK,
-    execute: wrap(getTask),
-  },
-  update_task_status: {
-    definition: TOOL_UPDATE_TASK_STATUS,
-    execute: wrap(updateTaskStatus),
-  },
-  get_messages: {
-    definition: TOOL_GET_MESSAGES,
-    execute: wrap(getMessages),
-  },
-  get_step_output: {
-    definition: TOOL_GET_STEP_OUTPUT,
-    execute: wrap(getStepOutput),
-  },
-  get_inbox: {
-    definition: TOOL_GET_INBOX,
-    execute: wrap(getInbox),
-  },
-  get_pipeline_runs: {
-    definition: TOOL_GET_PIPELINE_RUNS,
-    execute: wrap(getPipelineRuns),
-  },
-  get_project_info: {
-    definition: TOOL_GET_PROJECT_INFO,
-    execute: wrap(getProjectInfo),
-  },
-  update_project_stack: {
-    definition: TOOL_UPDATE_PROJECT_STACK,
-    execute: wrap(updateProjectStack),
-  },
-};
+export function registerTools(entries: Record<string, ToolEntry>): void {
+  for (const [name, entry] of Object.entries(entries)) {
+    registerTool(name, entry);
+  }
+}
+
+function ensureToolsRegistered(): void {
+  if (builtinsRegistered) return;
+  builtinsRegistered = true;
+  registerBuiltinTools();
+}
 
 /** Execute a tool by name. Returns the result or an error object. */
 export async function executeTool(
@@ -91,6 +39,7 @@ export async function executeTool(
   projectId: string,
   params: Record<string, unknown>,
 ): Promise<unknown> {
+  ensureToolsRegistered();
   const entry = TOOL_REGISTRY[name];
   if (!entry) {
     return { error: `Unknown tool: ${name}` };
@@ -105,5 +54,6 @@ export async function executeTool(
 
 /** Get all tool definitions (for listing in transports). */
 export function getAllToolDefinitions(): ToolDefinition[] {
+  ensureToolsRegistered();
   return Object.values(TOOL_REGISTRY).map((e) => e.definition);
 }

@@ -15,34 +15,31 @@
 | #608 | 8:36 PM | 🔵 | Log Parser for Pipeline Step Extraction | ~401 |
 | #590 | 8:35 PM | 🔵 | Stack Detection System | ~400 |
 | #487 | 8:34 PM | ✅ | PM prompt instruction updated to include conversational response option | ~382 |
+| #467 | 8:33 PM | 🟣 | parseConversationalResponse parser function implemented | ~370 |
+| #452 | " | 🟣 | Orchestrator conversational response handling and abort detection added | ~489 |
+| #413 | " | 🔵 | Worker Process Orchestrator Invocation | ~390 |
+| #360 | 8:32 PM | 🔵 | Skills System for Agent Context Injection | ~425 |
+| #333 | " | 🔵 | Event Logging System for Agent Context | ~387 |
+| #312 | " | 🔵 | Cost Tracking System with Free Tier Support | ~411 |
+| #284 | 8:31 PM | 🔵 | Gemini LLM Integration for Non-Coding Agents | ~356 |
+| #259 | " | 🔵 | Claude Code CLI Execution Infrastructure | ~425 |
+| #257 | " | 🔵 | Claude Code CLI execution with abort handling and live logging | ~646 |
+| #235 | " | 🔵 | Orchestrator Sequential Pipeline Execution Flow | ~471 |
+| #221 | " | 🔵 | File-based plan confirmation gate using polling mechanism | ~589 |
+| #202 | 8:30 PM | 🔵 | Agent Configuration and Role-Based System Prompts | ~423 |
+| #125 | " | 🔵 | Orchestrator pipeline architecture and execution flow | ~803 |
+| #65 | 8:29 PM | 🔵 | Pipeline worker process architecture | ~398 |
 
 ### Feb 4, 2026
 
 | ID | Time | T | Title | Read |
 |----|------|---|-------|------|
-| #2316 | 5:06 AM | 🔴 | Clear Session ID When Retrying Failed Tasks | ~400 |
-| #2315 | " | 🟣 | Session ID Reuse Implemented for Pipeline Resume and Agent Conversation Continuity | ~486 |
-| #2314 | " | 🔵 | Graph Resume Logic Handles Interrupted and Blocked Tasks | ~456 |
-| #2307 | 5:04 AM | 🟣 | Session IDs Now Persisted to Database for Task Resume Capability | ~390 |
-| #2288 | 5:02 AM | 🔴 | Removed Unused sessionIds Parameter from launchTasks Signature | ~358 |
-| #2287 | " | 🔴 | Removed Obsolete agentSessionIds Parameter from Execute Action Call | ~326 |
-| #2285 | 5:01 AM | 🔴 | agentSessionIds Still Referenced After Map Deletion | ~358 |
-| #2283 | " | 🔴 | Removed Stale agentSessionIds Parameter from Auto-Execute Path | ~342 |
-| #2278 | " | 🔵 | Second launchTasks Call Site Also Has Stale Parameter | ~374 |
-| #2277 | " | 🔄 | Removed Unused agentSessionIds Map from PM Decision Loop | ~390 |
-| #2275 | " | 🔵 | Agent Session IDs Initialized and Passed Through Decision Loop | ~269 |
-| #2274 | " | 🔵 | Stale agentSessionIds Variable Still Passed to launchTasks | ~372 |
-| #2272 | " | 🔵 | Launch Tasks Function Manages Parallel Task Execution with Session Tracking | ~323 |
-| #2270 | " | 🔴 | Fixed Session ID Conflicts by Assigning Unique ID Per Task | ~448 |
-| #2268 | 5:00 AM | 🔵 | Session IDs Used to Maintain Agent Continuity Across Tasks | ~369 |
-| #2244 | 4:57 AM | 🔵 | Orchestrator Invokes PM Decision Loop with Full Context and Resume Support | ~489 |
-| #2240 | 4:56 AM | 🔵 | PM Decision Loop Signature and Initial State Setup | ~443 |
-| #2239 | " | 🔵 | PM Decision Loop Writes Question and Emits Progress Event | ~376 |
-| #2236 | " | 🔵 | PM Question File Naming Uses RunId Without Timestamp Prefix | ~488 |
-| #2230 | 4:55 AM | 🔵 | Complete PM Question Flow Analysis from Backend to Frontend | ~685 |
-| #2222 | 4:54 AM | 🔵 | PM Decision Loop Orchestrates Dynamic Task Execution with User Gates | ~785 |
-| #2218 | 4:53 AM | 🔵 | File-Based Polling System for Pipeline-User Communication | ~577 |
-| #2214 | " | 🔵 | PM Question File Mechanism Found in Constants Configuration | ~497 |
+| #2834 | 7:47 PM | 🔵 | PM agent assignment is LLM-driven without hardcoded routing logic | ~461 |
+| #2831 | 7:46 PM | 🔵 | PM decision prompt supports dynamic mid-execution adjustments including reassignment | ~439 |
+| #2830 | " | 🔵 | PM decision loop replaces sequential pipeline execution with dynamic orchestration | ~391 |
+| #2829 | " | 🔵 | PM prompt explicitly shows Stack field as key decision context | ~391 |
+| #2822 | 7:44 PM | 🔵 | Orchestrator includes project stack in plan confirmation and logging | ~378 |
+| #2821 | " | 🔵 | PM prompt builder includes project stack and agent filtering | ~392 |
 | #1725 | 2:06 AM | 🔵 | Constants Define Sequential-Mode-Specific MAX_FIX_CYCLES Limit | ~564 |
 | #1724 | 2:05 AM | 🔵 | Pipeline Adaptation Module Fully Implemented But Completely Unused | ~615 |
 | #1720 | 2:04 AM | 🔵 | Worker Process Supports Pipeline Resume via resumeRunId Parameter | ~586 |

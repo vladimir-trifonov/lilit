@@ -35,7 +35,7 @@ import {
 } from "./task-graph-engine";
 import { checkForUserMessages, writePMQuestion, waitForUserResponse, cleanupQuestionFiles } from "./user-message-gate";
 import { extractJSON } from "./utils";
-import { getCheapestAvailableModel, getAdapter } from "./providers/index";
+import { getBestAvailableModel, resolveProviderId, getAdapter } from "./providers/index";
 import { calculateCost } from "./cost-calculator";
 import type { ProjectSettings } from "@/types/settings";
 import type { PipelineProgressEvent } from "@/types/pipeline";
@@ -61,6 +61,163 @@ import crypto from "crypto";
 function appendLog(projectId: string, text: string) {
   rawAppendLog(projectId, text);
 }
+
+type MessagePluginResult = {
+  output: string;
+  agentMessagesToPM: PMDecisionContext["agentMessagesToPM"];
+  recentAgentMessages: PMDecisionContext["recentAgentMessages"];
+};
+
+interface DecisionLoopPlugins {
+  messageHandler?: (opts: {
+    output: string;
+    agent: string;
+    role?: string;
+    taskId: string;
+    pipelineRunDbId: string;
+  }) => Promise<MessagePluginResult>;
+  debateHandler?: (opts: {
+    output: string;
+    agent: string;
+    role?: string;
+    projectId: string;
+    pipelineRunDbId: string;
+    settings: ProjectSettings;
+    allDebates: DebateRoundResult[];
+  }) => Promise<DebateRoundResult[]>;
+  memoryHandler?: (opts: {
+    projectId: string;
+    taskId: string;
+    agent: string;
+    role?: string;
+    output: string;
+    success: boolean;
+    settings: ProjectSettings;
+  }) => Promise<void>;
+}
+
+const DEFAULT_PLUGINS: Required<DecisionLoopPlugins> = {
+  async messageHandler(opts) {
+    const { output, agent, role, taskId, pipelineRunDbId } = opts;
+    const agentMessagesToPM: PMDecisionContext["agentMessagesToPM"] = [];
+    const recentAgentMessages: PMDecisionContext["recentAgentMessages"] = [];
+
+    if (!output) {
+      return { output, agentMessagesToPM, recentAgentMessages };
+    }
+
+    try {
+      const { cleanOutput, messages } = extractMessages(output);
+      if (messages.length > 0) {
+        const stored = await storeMessages({
+          pipelineRunId: pipelineRunDbId,
+          fromAgent: agent,
+          fromRole: role,
+          phase: 0,
+          messages,
+        });
+
+        for (const msg of stored) {
+          if (msg.toAgent === "pm") {
+            agentMessagesToPM.push({
+              from: agent,
+              type: msg.messageType,
+              content: msg.content,
+              taskId,
+            });
+          } else {
+            recentAgentMessages.push({
+              from: agent,
+              to: msg.toAgent,
+              type: msg.messageType,
+              content: msg.content,
+            });
+          }
+        }
+        return { output: cleanOutput, agentMessagesToPM, recentAgentMessages };
+      }
+    } catch {
+      // Non-fatal
+    }
+
+    return { output, agentMessagesToPM, recentAgentMessages };
+  },
+  async debateHandler(opts) {
+    const { output, agent, role, projectId, pipelineRunDbId, settings, allDebates } = opts;
+    const newDebates: DebateRoundResult[] = [];
+    const debateEnabled =
+      settings.personalityEnabled !== false && settings.debateEnabled !== false;
+    if (!debateEnabled || !output) return newDebates;
+
+    try {
+      const conflicts = await evaluateDebateTriggers({
+        projectId,
+        pipelineRunId: pipelineRunDbId,
+        stepIndex: 0,
+        step: { agent, role },
+        stepOutput: output,
+        settings,
+        runningCost: 0,
+        budgetLimit: settings.budgetLimit,
+        debatesThisRun: allDebates.length,
+      });
+
+      for (const conflict of conflicts) {
+        const round = await runDebateRound({
+          conflict,
+          pipelineRunId: pipelineRunDbId,
+          projectId,
+          cwd: project.path,
+          stepIndex: 0,
+        });
+        await storeDebateRound(round);
+        await ingestDebateMemory(projectId, round);
+        await updateDebateRelationships(projectId, round);
+        newDebates.push(round);
+      }
+    } catch {
+      // Non-fatal
+    }
+
+    return newDebates;
+  },
+  async memoryHandler(opts) {
+    const { projectId, taskId, agent, role, output, success, settings } = opts;
+    const eventType = getEventType({ agent, role });
+
+    try {
+      const eventRecord = await logEvent({
+        projectId,
+        taskId,
+        agent,
+        role,
+        type: eventType,
+        data: { summary: output.slice(0, 2000), success },
+      });
+
+      if (settings.personalityEnabled !== false) {
+        ingestDecisionFromEvent(
+          projectId,
+          eventRecord.id,
+          eventType,
+          agent,
+          role,
+          { summary: output.slice(0, 2000), success },
+        ).catch(() => {});
+        ingestPersonalityFromAgentRun(
+          projectId,
+          eventRecord.id,
+          agent,
+          role,
+          output,
+        ).catch(() => {});
+        updateRelationships(projectId, { agent, role }, { success, output }, [], 0).catch(() => {});
+      }
+    } catch {
+      // Non-fatal
+    }
+  },
+};
 
 const PM_DECISION_SYSTEM_PROMPT = `You are the Project Manager (PM). You make routing decisions during pipeline execution.
 
@@ -109,14 +266,17 @@ export async function runPMDecisionLoop(opts: {
   onProgress: (event: PipelineProgressEvent) => void;
   /** Override the initial trigger (e.g. pipeline_resumed). Falls back to "initial". */
   initialTrigger?: DecisionTrigger;
+  plugins?: DecisionLoopPlugins;
 }): Promise<DecisionLoopResult> {
   const {
     projectId,
+    project,
     settings,
     pipelineRunDbId,
     runId,
     onProgress: emit,
   } = opts;
+  const plugins = opts.plugins ?? DEFAULT_PLUGINS;
 
   let graph = opts.graph;
   let decisionCount = 0;
@@ -163,73 +323,81 @@ export async function runPMDecisionLoop(opts: {
 
     // 3. If no trigger and tasks are running, wait for one to complete
     //    Poll every 30s to check liveness (abort, log freshness, user messages).
+    //    Returns null when user messages arrive — lets PM react without waiting for task.
     if (!pendingTrigger && runningTaskPromises.size > 0) {
-      const completed = await awaitNextCompletion(runningTaskPromises, projectId, runId);
-      runningTaskPromises.delete(completed.taskId);
-      const taskNode = graph.tasks[completed.taskId];
+      const completed = await awaitNextCompletion(runningTaskPromises, projectId, runId, accumulatedUserMessages);
 
-      if (completed.result.success) {
-        graph = updateTaskStatus(graph, completed.taskId, {
-          status: "done",
-          output: completed.result.output,
-          costUsd: completed.result.cost,
-        });
-
-        // Process completed task output
-        await processTaskOutput(
-          completed.taskId,
-          completed.result,
-          taskNode,
-          graph,
-          opts,
-          steps,
-          agentMessagesToPM,
-          recentAgentMessages,
-          allDebates,
-          pipelineRunDbId,
-          settings,
-        );
-
-        if (completed.result.cost) runningCost += completed.result.cost;
-
-        pendingTrigger = {
-          type: "task_completed",
-          taskId: completed.taskId,
-          output: completed.result.output.slice(0, TASK_OUTPUT_SUMMARY_LENGTH),
-        };
+      if (!completed) {
+        // User message arrived while tasks are still running — trigger PM immediately
+        pendingTrigger = { type: "user_message", message: accumulatedUserMessages[accumulatedUserMessages.length - 1] };
       } else {
-        const attempts = (taskNode?.attempts ?? 0) + 1;
-        graph = updateTaskStatus(graph, completed.taskId, {
-          status: "failed",
-          error: completed.result.output,
-          attempts,
-        });
+        runningTaskPromises.delete(completed.taskId);
+        const taskNode = graph.tasks[completed.taskId];
 
-        steps.push({
-          agent: taskNode?.agent ?? "unknown",
-          role: taskNode?.role,
-          title: taskNode?.title ?? completed.taskId,
-          status: "failed",
-          output: completed.result.output,
-        });
+        if (completed.result.success) {
+          graph = updateTaskStatus(graph, completed.taskId, {
+            status: "done",
+            output: completed.result.output,
+            costUsd: completed.result.cost,
+          });
 
-        if (completed.result.cost) runningCost += completed.result.cost;
+          // Process completed task output
+          await processTaskOutput(
+            completed.taskId,
+            completed.result,
+            taskNode,
+            graph,
+            opts,
+            steps,
+            agentMessagesToPM,
+            recentAgentMessages,
+            allDebates,
+            pipelineRunDbId,
+            settings,
+            plugins,
+          );
 
-        pendingTrigger = {
-          type: "task_failed",
-          taskId: completed.taskId,
-          error: completed.result.output.slice(0, TASK_OUTPUT_SUMMARY_LENGTH),
-          attempts,
-        };
-      }
+          if (completed.result.cost) runningCost += completed.result.cost;
 
-      // Update task in DB
-      await updateTaskInDb(completed.taskId, graph.tasks[completed.taskId], pipelineRunDbId);
+          pendingTrigger = {
+            type: "task_completed",
+            taskId: completed.taskId,
+            output: completed.result.output.slice(0, TASK_OUTPUT_SUMMARY_LENGTH),
+          };
+        } else {
+          const attempts = (taskNode?.attempts ?? 0) + 1;
+          graph = updateTaskStatus(graph, completed.taskId, {
+            status: "failed",
+            error: completed.result.output,
+            attempts,
+          });
 
-      // Check abort after task completion — prevents PM call on aborted task
-      if (isAborted(projectId)) {
-        appendLog(projectId, `\n🛑 Pipeline aborted after task ${completed.taskId} completed\n`);
-        break;
+          steps.push({
+            agent: taskNode?.agent ?? "unknown",
+            role: taskNode?.role,
+            title: taskNode?.title ?? completed.taskId,
+            status: "failed",
+            output: completed.result.output,
+          });
+
+          if (completed.result.cost) runningCost += completed.result.cost;
+
+          pendingTrigger = {
+            type: "task_failed",
+            taskId: completed.taskId,
+            error: completed.result.output.slice(0, TASK_OUTPUT_SUMMARY_LENGTH),
+            attempts,
+          };
+        }
+
+        // Update task in DB
+        await updateTaskInDb(completed.taskId, graph.tasks[completed.taskId], pipelineRunDbId);
+
+        // Check abort after task completion — prevents PM call on aborted task
+        if (isAborted(projectId)) {
+          appendLog(projectId, `\n🛑 Pipeline aborted after task ${completed.taskId} completed\n`);
+          break;
+        }
       }
     }
 
@@ -296,13 +464,17 @@ export async function runPMDecisionLoop(opts: {
     appendLog(projectId, `${"─".repeat(60)}\n`);
 
     const pmPrompt = buildPMDecisionPrompt(ctx);
-    const pmModel = await getCheapestAvailableModel();
+    const pmSettingsModel = settings?.agents?.pm?.model;
+    const pmModel = pmSettingsModel
+      ? { provider: resolveProviderId(pmSettingsModel), model: pmSettingsModel }
+      : await getBestAvailableModel();
     const pmAdapter = getAdapter(pmModel.provider);
 
     const pmResult = await pmAdapter.execute({
       prompt: pmPrompt,
       systemPrompt: PM_DECISION_SYSTEM_PROMPT,
       model: pmModel.model,
+      cwd: project.path,
       agentLabel: "pm:decision",
       projectId,
       enableTools: true,
@@ -675,12 +847,14 @@ function withTimeout(
  *
  * Returns as soon as any task resolves/rejects, or force-fails a task
  * if the log goes stale or the pipeline is aborted.
+ * Returns null when user messages arrive — lets PM react without waiting for task.
  */
 async function awaitNextCompletion(
   runningPromises: Map<string, Promise<TaskResult>>,
   projectId: string,
   runId: string,
-): Promise<TaskResult> {
+  accumulatedUserMessages: string[],
+): Promise<TaskResult | null> {
   let lastLogActivity = Date.now();
 
   for (;;) {
@@ -738,10 +912,12 @@ async function awaitNextCompletion(
       };
     }
 
-    // 3. User messages — note them so main loop can pick up after return
+    // 3. User messages — accumulate and return null to let PM react immediately
     const msgs = checkForUserMessages(projectId, runId);
     if (msgs.length > 0) {
-      appendLog(projectId, `📨 ${msgs.length} user message(s) received during task execution\n`);
+      accumulatedUserMessages.push(...msgs);
+      appendLog(projectId, `📨 ${msgs.length} user message(s) received during task execution — triggering PM\n`);
+      return null;
     }
   }
 }
@@ -938,6 +1114,7 @@ async function processTaskOutput(
   allDebates: DebateRoundResult[],
   pipelineRunDbId: string,
   settings: ProjectSettings,
+  plugins: DecisionLoopPlugins,
 ) {
   const { projectId } = ctx;
   const agent = taskNode?.agent ?? "unknown";
@@ -951,113 +1128,53 @@ async function processTaskOutput(
     output: result.output,
   });
 
-  // Extract inter-agent messages
+  // Extract inter-agent messages (plugin)
   if (result.output) {
-    try {
-      const { cleanOutput, messages } = extractMessages(result.output);
-      if (messages.length > 0) {
-        const stored = await storeMessages({
-          pipelineRunId: pipelineRunDbId,
-          fromAgent: agent,
-          fromRole: role,
-          phase: 0, // phase is less meaningful in dynamic mode
-          messages,
-        });
-
-        for (const msg of stored) {
-          if (msg.toAgent === "pm") {
-            agentMessagesToPM.push({
-              from: agent,
-              type: msg.messageType,
-              content: msg.content,
-              taskId,
-            });
-          } else {
-            recentAgentMessages.push({
-              from: agent,
-              to: msg.toAgent,
-              type: msg.messageType,
-              content: msg.content,
-            });
-          }
-        }
-
-        // Use cleaned output
-        result.output = cleanOutput;
-      }
-    } catch {
-      // Non-fatal
-    }
-  }
-
-  // Debate evaluation
-  const debateEnabled =
-    settings.personalityEnabled !== false && settings.debateEnabled !== false;
-  if (debateEnabled && result.output) {
-    try {
-      const conflicts = await evaluateDebateTriggers({
-        projectId,
-        pipelineRunId: pipelineRunDbId,
-        stepIndex: 0,
-        step: { agent, role },
-        stepOutput: result.output,
-        settings,
-        runningCost: 0,
-        budgetLimit: settings.budgetLimit,
-        debatesThisRun: allDebates.length,
-      });
-
-      for (const conflict of conflicts) {
-        const round = await runDebateRound({
-          conflict,
-          pipelineRunId: pipelineRunDbId,
-          projectId,
-          stepIndex: 0,
-        });
-        await storeDebateRound(round);
-        await ingestDebateMemory(projectId, round);
-        await updateDebateRelationships(projectId, round);
-        allDebates.push(round);
-      }
-    } catch {
-      // Non-fatal
-    }
-  }
-
-  // Event logging + memory ingestion
-  const step = { agent, role };
-  const eventType = getEventType(step);
-  try {
-    const eventRecord = await logEvent({
-      projectId,
-      taskId: taskId,
+    const handler = plugins.messageHandler ?? DEFAULT_PLUGINS.messageHandler;
+    const handled = await handler({
+      output: result.output,
       agent,
       role,
-      type: eventType,
-      data: { summary: result.output.slice(0, 2000), success: result.success },
+      taskId,
+      pipelineRunDbId,
     });
-
-    if (settings.personalityEnabled !== false) {
-      ingestDecisionFromEvent(
-        projectId,
-        eventRecord.id,
-        eventType,
-        agent,
-        role,
-        { summary: result.output.slice(0, 2000), success: result.success },
-      ).catch(() => {});
-      ingestPersonalityFromAgentRun(
-        projectId,
-        eventRecord.id,
-        agent,
-        role,
-        result.output,
-      ).catch(() => {});
-      updateRelationships(projectId, step, result, [], 0).catch(() => {});
+    if (handled.agentMessagesToPM.length > 0) {
+      agentMessagesToPM.push(...handled.agentMessagesToPM);
     }
-  } catch {
-    // Non-fatal
+    if (handled.recentAgentMessages.length > 0) {
+      recentAgentMessages.push(...handled.recentAgentMessages);
+    }
+    result.output = handled.output;
   }
+
+  // Debate evaluation (plugin)
+  if (result.output) {
+    const handler = plugins.debateHandler ?? DEFAULT_PLUGINS.debateHandler;
+    const newDebates = await handler({
+      output: result.output,
+      agent,
+      role,
+      projectId,
+      pipelineRunDbId,
+      settings,
+      allDebates,
+    });
+    if (newDebates.length > 0) {
+      allDebates.push(...newDebates);
+    }
+  }
+
+  // Event logging + memory ingestion (plugin)
+  const handler = plugins.memoryHandler ?? DEFAULT_PLUGINS.memoryHandler;
+  await handler({
+    projectId,
+    taskId,
+    agent,
+    role,
+    output: result.output,
+    success: result.success,
+    settings,
+  });
 }
 
 async function updateTaskInDb(

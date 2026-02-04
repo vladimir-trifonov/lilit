@@ -106,9 +106,7 @@ export const claudeCodeAdapter: ProviderAdapter = {
       agentLabel = "agent",
     } = ctx;
 
-    if (!cwd) {
-      throw new Error("Claude Code adapter requires an explicit cwd");
-    }
+    const effectiveCwd = cwd || process.cwd();
 
     if (projectId && isAborted(projectId)) {
       appendLog(projectId, `\n[${agentLabel}] Skipped -- pipeline aborted\n`);
@@ -183,7 +181,7 @@ export const claudeCodeAdapter: ProviderAdapter = {
       let killed = false;
 
       const proc = spawn("claude", args, {
-        cwd,
+        cwd: effectiveCwd,
         env: process.env,
         stdio: ["ignore", "pipe", "pipe"],
       });

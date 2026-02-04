@@ -8,11 +8,12 @@
 
 import { useMemo, useState } from "react";
 import { ShimmeringText } from "@/components/ui/shimmering-text";
-import type { PipelineStep, StepStatus, DbTask } from "@/types/pipeline";
+import type { PipelineStep, StepStatus, DbTask, PipelineTaskView } from "@/types/pipeline";
 
 interface PipelineStepsProps {
   steps: PipelineStep[];
   tasks?: DbTask[];
+  pipelineView?: PipelineTaskView[];
   className?: string;
 }
 
@@ -49,7 +50,8 @@ function taskStatusToStepStatus(status: string): StepStatus {
 }
 
 /** Check if tasks have graph IDs (DAG mode) */
-function isGraphMode(tasks: DbTask[]): boolean {
+function isGraphMode(tasks: DbTask[], view?: PipelineTaskView[]): boolean {
+  if (view && view.length > 0) return true;
   return tasks.some((t) => t.graphId != null);
 }
 
@@ -246,9 +248,34 @@ function TaskCard({ task }: { task: GraphTask }) {
   );
 }
 
-function TaskGraphView({ tasks, className }: { tasks: DbTask[]; className: string }) {
-  const graphTasks: GraphTask[] = useMemo(() =>
-    tasks.map((t) => ({
+function viewToGraphTasks(view: PipelineTaskView[]): GraphTask[] {
+  return view.map((t) => ({
+    id: t.id,
+    title: t.title,
+    description: t.description,
+    agent: t.agent,
+    role: t.role,
+    status: taskStatusToStepStatus(t.status),
+    rawStatus: t.status,
+    dependsOn: t.dependsOn,
+    acceptanceCriteria: t.acceptanceCriteria,
+    outputSummary: t.outputSummary,
+    order: t.order,
+  }));
+}
+
+function TaskGraphView({
+  tasks,
+  view,
+  className,
+}: {
+  tasks: DbTask[];
+  view?: PipelineTaskView[];
+  className: string;
+}) {
+  const graphTasks: GraphTask[] = useMemo(() => {
+    if (view && view.length > 0) return viewToGraphTasks(view);
+    return tasks.map((t) => ({
       id: t.graphId ?? `seq-${t.sequenceOrder}`,
       title: t.title,
       description: t.description,
@@ -260,16 +287,17 @@ function TaskGraphView({ tasks, className }: { tasks: DbTask[]; className: strin
       acceptanceCriteria: t.acceptanceCriteria ?? [],
       outputSummary: t.outputSummary ?? null,
       order: t.sequenceOrder,
-    })),
-    [tasks],
-  );
+    }));
+  }, [tasks, view]);
 
   const layers = useMemo(() => computeLayers(graphTasks), [graphTasks]);
 
   const doneCount = graphTasks.filter((t) => t.status === "done").length;
   const runningCount = graphTasks.filter((t) => t.status === "running").length;
+  const pendingCount = graphTasks.filter((t) => t.status === "pending").length;
   const totalCount = graphTasks.length;
   const progressPct = totalCount > 0 ? Math.round((doneCount / totalCount) * 100) : 0;
+  const allPending = pendingCount === totalCount;
 
   return (
     <div className={`flex flex-col gap-3 ${className}`}>
@@ -285,6 +313,11 @@ function TaskGraphView({ tasks, className }: { tasks: DbTask[]; className: strin
                   {runningCount} running
                 </span>
               )}
+              {allPending && (
+                <span className="text-muted-foreground ml-1">
+                  ready to start
+                </span>
+              )}
             </span>
           </div>
           <span className="text-[10px] text-faint font-mono">{progressPct}%</span>
@@ -292,7 +325,9 @@ function TaskGraphView({ tasks, className }: { tasks: DbTask[]; className: strin
         {/* Progress bar */}
         <div className="h-1 rounded-full bg-muted overflow-hidden">
           <div
-            className="h-full rounded-full bg-brand transition-all duration-500 ease-out"
+            className={`h-full rounded-full transition-all duration-500 ease-out ${
+              allPending ? "bg-muted-foreground/30" : "bg-brand"
+            }`}
             style={{ width: `${progressPct}%` }}
           />
         </div>
@@ -338,17 +373,16 @@ function TaskGraphView({ tasks, className }: { tasks: DbTask[]; className: strin
 
 // ── Main component ──────────────────────────────────────────────────────────
 
-export function PipelineSteps({ steps, tasks, className = "" }: PipelineStepsProps) {
-  // Prefer DB tasks when they have meaningful statuses (at least one assigned/in_progress/done/failed)
-  const hasActiveTasks = tasks && tasks.length > 0 &&
-    tasks.some((t) => t.status !== "created");
+export function PipelineSteps({ steps, tasks, pipelineView, className = "" }: PipelineStepsProps) {
+  // Prefer DB tasks when they exist (show them even in "created" state)
+  const hasTasks = tasks && tasks.length > 0;
 
   // Use graph mode when tasks have graphId fields
-  if (hasActiveTasks && isGraphMode(tasks)) {
-    return <TaskGraphView tasks={tasks} className={className} />;
+  if (hasTasks && isGraphMode(tasks, pipelineView)) {
+    return <TaskGraphView tasks={tasks} view={pipelineView} className={className} />;
   }
 
-  const resolvedSteps = hasActiveTasks ? tasksToSteps(tasks!) : steps;
+  const resolvedSteps = hasTasks ? tasksToSteps(tasks!) : steps;
 
   if (resolvedSteps.length === 0) return null;
 

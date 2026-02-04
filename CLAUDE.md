@@ -221,6 +221,13 @@ Key relationships:
 - **Child process output**: Truncate stderr output from worker processes before logging to prevent sensitive data (API keys, tokens) from appearing in server logs. Use `WORKER_STDERR_MAX_LENGTH` from constants.
 - **No legacy code**: When a feature or execution path is superseded, remove it entirely. Do not keep dead code behind feature flags, commented out, or gated by settings that are always true/false. If the old path has no call sites or is unreachable, delete it. Unused imports, helper functions, types, constants, and UI blocks must be removed in the same change.
 
+### AI should no longer do
+
+- **Do not hardcode providers/tools** inside registries. Register built-ins via `src/lib/providers/builtin.ts` + `src/lib/providers/bootstrap.ts` and `src/lib/tools/bootstrap.ts`.
+- **Do not call `/api/*` directly in hooks** that orchestrate pipeline state. Use typed clients in `src/lib/clients/*` (e.g., `PipelineClient`).
+- **Do not embed provider-specific UI** inside shared settings panels. Provider settings must live under `src/components/provider-settings/` and be composed into the panel.
+- **Do not drive pipeline UI from raw DB task shapes** when a view model is available. Prefer `pipelineView` for rendering.
+
 ### Shared Utilities (use these, don't re-implement)
 
 | Utility | Location | Use for |

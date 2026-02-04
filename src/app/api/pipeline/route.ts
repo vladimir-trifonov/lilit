@@ -115,12 +115,14 @@ export async function GET(req: Request) {
     },
   });
 
-  // Fetch past runs — only those with actual tasks (filters out conversational-only runs)
+  // Fetch past runs — only terminal runs with actual tasks
+  // Excludes conversational-only runs, active pipelines, and pending confirmations
   const pastRunsCursor = searchParams.get("pastRunsCursor");
   const pastRunsWhere: Record<string, unknown> = {
     projectId,
     id: { not: run.id },
     tasks: { some: {} },
+    status: { in: ["completed", "failed", "aborted"] },
   };
   if (pastRunsCursor) {
     const cursorDate = new Date(pastRunsCursor);
@@ -151,6 +153,19 @@ export async function GET(req: Request) {
   const nextPastRunsCursor = hasMorePastRuns && pastRunsRaw.length > 0
     ? pastRunsRaw[pastRunsRaw.length - 1].updatedAt.toISOString()
     : null;
+
+  const pipelineView = tasks.map((t) => ({
+    id: t.graphId ?? t.id,
+    title: t.title,
+    description: t.description,
+    agent: t.assignedAgent ?? "unassigned",
+    role: t.assignedRole ?? undefined,
+    status: t.status,
+    dependsOn: t.dependsOn ?? [],
+    acceptanceCriteria: t.acceptanceCriteria ?? [],
+    outputSummary: t.outputSummary ?? null,
+    order: t.sequenceOrder,
+  }));
 
   return NextResponse.json({
     status: effectiveStatus,
@@ -185,6 +200,7 @@ export async function GET(req: Request) {
     }),
     hasMorePastRuns,
     pastRunsCursor: nextPastRunsCursor,
+    pipelineView,
     ...(effectiveStatus === "awaiting_plan" && run.plan ? { plan: JSON.parse(run.plan) } : {}),
   });
 }
@@ -226,10 +242,11 @@ export async function POST(req: Request) {
   const workerScript = path.resolve(process.cwd(), "src/lib/worker.ts");
 
   if (action === "resume") {
-    // Validate the run has saved state for resumption
-    if (!run.plan || !run.taskGraph) {
+    // Validate the run has a saved plan for resumption (taskGraph may be absent
+    // for rejected plans — the orchestrator will build it from the plan on resume)
+    if (!run.plan) {
       return NextResponse.json(
-        { error: "Cannot resume: run has no saved plan or task graph" },
+        { error: "Cannot resume: run has no saved plan" },
         { status: 400 }
       );
     }

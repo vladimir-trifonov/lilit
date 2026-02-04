@@ -9,9 +9,11 @@ import type { AgentMessageData } from "@/components/agent-message-thread";
 export interface UseAgentMessagesResult {
   messages: AgentMessageData[];
   total: number;
+  unread: boolean;
   hasMore: boolean;
   loadingMore: boolean;
   loadOlderMessages: () => Promise<void>;
+  markRead: () => void;
 }
 
 /**
@@ -26,6 +28,7 @@ export function useAgentMessages(
 ): UseAgentMessagesResult {
   const [messages, setMessages] = useState<AgentMessageData[]>([]);
   const [hasMore, setHasMore] = useState(false);
+  const [unread, setUnread] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
   const seenIdsRef = useRef(new Set<string>());
   const lastTimestampRef = useRef<string | null>(null);
@@ -43,6 +46,7 @@ export function useAgentMessages(
       oldestTimestampRef.current = null;
       setMessages([]);
       setHasMore(false);
+      setUnread(false);
     }
 
     let url = `/api/messages?pipelineRunId=${pipelineRunId}`;
@@ -66,6 +70,7 @@ export function useAgentMessages(
           oldestTimestampRef.current = fresh[0].createdAt;
         }
         setMessages((prev) => [...prev, ...fresh]);
+        setUnread(true);
       }
     } catch {
       // ignore — next poll will retry
@@ -103,5 +108,7 @@ export function useAgentMessages(
     enabled && !!pipelineRunId,
   );
 
-  return { messages, total: messages.length, hasMore, loadingMore, loadOlderMessages };
+  const markRead = useCallback(() => setUnread(false), []);
+
+  return { messages, total: messages.length, unread, hasMore, loadingMore, loadOlderMessages, markRead };
 }

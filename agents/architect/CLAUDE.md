@@ -7,5 +7,6 @@
 
 | ID | Time | T | Title | Read |
 |----|------|---|-------|------|
-| #2811 | 7:42 PM | 🔵 | PM agent documentation reviewed for output format clarification | ~373 |
+| #2834 | 7:47 PM | 🔵 | PM agent assignment is LLM-driven without hardcoded routing logic | ~461 |
+| #2833 | " | 🔵 | Architect agent configuration defines high-level technical decision responsibilities | ~429 |
 </claude-mem-context>

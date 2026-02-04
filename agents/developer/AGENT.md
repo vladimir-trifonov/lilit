@@ -3,7 +3,6 @@ name: Developer
 type: developer
 description: "Writes, reviews, and fixes code"
 provider: claude-code
-model: haiku
 capabilities:
   - file-access
   - shell-access

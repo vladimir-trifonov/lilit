@@ -16,7 +16,7 @@ import { AgentsPanel } from "@/components/agents-panel";
 import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from "@/components/ui/resizable";
 import { usePipeline } from "@/lib/hooks/use-pipeline";
 import { useMessages } from "@/lib/hooks/use-messages";
-import type { StepInfo, DbTask, PastRun } from "@/types/pipeline";
+import type { StepInfo, DbTask, PastRun, PipelineTaskView } from "@/types/pipeline";
 import { StandupThread, type StandupMessageData } from "@/components/standup-thread";
 import { AgentMessageThread, type AgentMessageData } from "@/components/agent-message-thread";
 import { PMQuestionCard } from "@/components/pm-question-card";
@@ -204,22 +204,46 @@ export function Chat({ project }: { project: Project }) {
                   <MessageBubble key={msg.id} message={msg} />
                 ))}
 
-                {pipeline.loading && (
+                {(pipeline.loading || pipeline.failedRun) && (
                   <div className="space-y-6 py-4 animate-fade-in">
-                    <div className="flex items-center gap-3">
-                      <div className="w-8 h-8 rounded-full bg-brand/10 flex items-center justify-center border border-brand/20">
-                         <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-brand border-t-transparent" />
+                    {pipeline.loading ? (
+                      <div className="flex items-center gap-3">
+                        <div className="w-8 h-8 rounded-full bg-brand/10 flex items-center justify-center border border-brand/20">
+                           <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-brand border-t-transparent" />
+                        </div>
+                        <span className="text-sm font-medium text-brand animate-pulse">Lilit is working...</span>
                       </div>
-                      <span className="text-sm font-medium text-brand animate-pulse">Lilit is working...</span>
-                    </div>
-                    
+                    ) : (
+                      <div className="flex items-center gap-3">
+                        <div className="w-8 h-8 rounded-full bg-destructive/10 flex items-center justify-center border border-destructive/20">
+                           <span className="text-destructive text-sm font-bold">&times;</span>
+                        </div>
+                        <span className="text-sm font-medium text-destructive">Pipeline failed</span>
+                      </div>
+                    )}
+
                     <div className="pl-11">
-                         {(pipeline.pipelineSteps.length > 0 || pipeline.tasks.length > 0) && (
-                           <div className="rounded-2xl p-4 border border-border-subtle/50">
-                             <PipelineSteps steps={pipeline.pipelineSteps} tasks={pipeline.tasks} />
+                         {(pipeline.tasks.length > 0 || pipeline.pipelineSteps.length > 0) && (
+                           <div className={`rounded-2xl p-4 border ${pipeline.failedRun ? "border-destructive/20" : "border-border-subtle/50"}`}>
+                             <PipelineSteps steps={pipeline.pipelineSteps} tasks={pipeline.tasks} pipelineView={pipeline.pipelineView} />
                            </div>
                          )}
-                         {pipeline.pendingPlan && (
+                         {pipeline.failedRun && (
+                           <div className="mt-4 bg-destructive-soft/30 border border-destructive/20 rounded-2xl p-5 space-y-3 animate-fade-in backdrop-blur-md">
+                             <p className="text-sm text-foreground/80">
+                               Some tasks encountered errors. You can resume to retry failed tasks, or dismiss to move this run to history.
+                             </p>
+                             <div className="flex items-center gap-3 pt-1">
+                               <Button onClick={pipeline.resumeFailedRun} size="sm" className="text-xs shadow-lg shadow-destructive/20 bg-destructive hover:bg-destructive/90 text-white border-none">
+                                 Resume
+                               </Button>
+                               <Button onClick={pipeline.dismissFailedRun} variant="ghost" size="sm" className="text-xs text-muted-foreground hover:text-foreground">
+                                 Dismiss
+                               </Button>
+                             </div>
+                           </div>
+                         )}
+                         {pipeline.loading && pipeline.pendingPlan && (
                            <div className="mt-4">
                              <PlanConfirmation
                                projectId={project.id}
@@ -230,7 +254,7 @@ export function Chat({ project }: { project: Project }) {
                              />
                            </div>
                          )}
-                         {pipeline.pendingQuestion && (
+                         {pipeline.loading && pipeline.pendingQuestion && (
                            <div className="mt-4">
                              <PMQuestionCard
                                question={pipeline.pendingQuestion.question}
@@ -258,15 +282,15 @@ export function Chat({ project }: { project: Project }) {
             
             {/* Input - Levitating Bar */}
             <div className="absolute bottom-6 left-0 right-0 px-4 md:px-8 z-30 pointer-events-none">
-              <div className="max-w-3xl mx-auto pointer-events-auto">
-                 <div className="glass-floating rounded-[26px] px-2 py-1.5 flex flex-col gap-1.5 relative group focus-within:ring-1 focus-within:ring-brand/50 transition-all duration-300 ease-out max-h-[72px] group-focus-within:max-h-[200px] overflow-hidden opacity-85 hover:opacity-95 group-focus-within:opacity-100 scale-[0.98] group-focus-within:scale-100">
+              <div className="max-w-2xl mx-auto pointer-events-auto">
+                 <div className="glass-floating rounded-[26px] px-2 py-1.5 flex flex-col gap-1.5 relative group focus-within:ring-1 focus-within:ring-brand/50 transition-all duration-300 ease-out max-h-[400px] overflow-hidden opacity-85 hover:opacity-95 group-focus-within:opacity-100 scale-[0.98] group-focus-within:scale-100">
                     <Textarea
                       placeholder={pipeline.loading ? "Running..." : "Ask Lilit..."}
                       value={input}
                       onChange={(e) => setInput(e.target.value)}
                       onKeyDown={handleKeyDown}
                       rows={1}
-                      className="bg-transparent border-none resize-none min-h-[36px] max-h-[200px] text-[14px] leading-5 px-4 py-1.5 focus-visible:ring-0 placeholder:text-muted-foreground/50"
+                      className="bg-transparent border-none resize-none min-h-[36px] max-h-[300px] overflow-y-auto text-[14px] leading-5 px-4 py-1.5 focus-visible:ring-0 placeholder:text-muted-foreground/50"
                       style={{ boxShadow: 'none' }}
                     />
                     <div className="flex items-center justify-between px-2 pb-1 opacity-80 group-focus-within:opacity-100 transition-opacity">
@@ -294,7 +318,7 @@ export function Chat({ project }: { project: Project }) {
           {showLog && (
             <>
               <ResizableHandle withHandle className="bg-white/5 w-[1px] hover:bg-white/10 transition-colors" />
-              <ResizablePanel defaultSize={40} minSize={20} className="bg-surface/20 backdrop-blur-xl">
+              <ResizablePanel defaultSize={40} minSize={20} className="backdrop-blur-xl">
                 {/* Log panel (right side) */}
                 <div className="flex flex-col h-full min-h-0">
                   <div className="h-10 flex items-center px-4 gap-2 shrink-0 border-b border-white/5">
@@ -327,7 +351,7 @@ export function Chat({ project }: { project: Project }) {
 
                   {/* Current pipeline log — scrolls independently, takes remaining space */}
                   {(pipeline.logContent || pipeline.loading) ? (
-                    <div ref={logPanelRef} className="flex-1 min-h-0 overflow-auto scrollbar-thin scrollbar-thumb-white/10 scrollbar-track-transparent">
+                    <div ref={logPanelRef} className="flex-1 min-h-0 overflow-auto">
                       {useEnhancedLog ? (
                         <EnhancedLogPanel
                           logContent={pipeline.logContent}
@@ -343,7 +367,7 @@ export function Chat({ project }: { project: Project }) {
                       )}
                     </div>
                   ) : pipeline.pastRuns.length === 0 ? (
-                    <div className="flex-1 min-h-0 overflow-auto scrollbar-thin scrollbar-thumb-white/10 scrollbar-track-transparent">
+                    <div className="flex-1 min-h-0 overflow-auto">
                       {useEnhancedLog ? (
                         <div className="h-full">
                           <EnhancedLogPanel logContent="" loading={false} currentAgent={null} />
@@ -362,7 +386,7 @@ export function Chat({ project }: { project: Project }) {
                     const anyExpanded = pipeline.pastRuns.some(r => r.expanded);
                     const sizeClass = !hasCurrentLog || anyExpanded ? "flex-1 min-h-0" : "max-h-[50%]";
                     return (
-                    <div className={`${sizeClass} overflow-auto scrollbar-thin scrollbar-thumb-white/10 scrollbar-track-transparent ${hasCurrentLog ? "border-t border-white/5" : ""}`}>
+                    <div className={`${sizeClass} overflow-auto ${hasCurrentLog ? "border-t border-white/5" : ""}`}>
                       <div className="px-4 py-3 text-[10px] font-medium text-muted-foreground uppercase tracking-wider bg-white/2 sticky top-0 z-10">
                         History
                       </div>
@@ -450,6 +474,7 @@ function MessageBubble({ message }: { message: Message }) {
   let metaTasks: DbTask[] = [];
   let standupMessages: StandupMessageData[] = [];
   let agentMessages: AgentMessageData[] = [];
+  let pipelineView: PipelineTaskView[] = [];
   let debates: Array<{ challengerAgent: string; defenderAgent: string; triggerOpinion: string; outcome: string; turnCount: number; resolutionNote?: string }> = [];
   if (message.metadata) {
     try {
@@ -458,6 +483,7 @@ function MessageBubble({ message }: { message: Message }) {
       metaTasks = meta.tasks || [];
       standupMessages = meta.standup?.messages || [];
       agentMessages = meta.agentMessages || [];
+      pipelineView = meta.pipelineView || [];
       debates = meta.debates || [];
     } catch {
       // ignore
@@ -544,7 +570,11 @@ function MessageBubble({ message }: { message: Message }) {
 
         {metaTasks.length > 0 ? (
           <div className="mt-4 pt-3 border-t border-border-subtle">
-            <PipelineSteps steps={[]} tasks={metaTasks} />
+                            <PipelineSteps
+                              steps={[]}
+                              tasks={metaTasks}
+                              pipelineView={pipelineView}
+                            />
           </div>
         ) : steps.length > 0 ? (
           <div className="mt-4 pt-3 border-t border-border-subtle space-y-2">
@@ -670,14 +700,18 @@ function PastRunEntry({
             <>
               {run.tasks && run.tasks.length > 0 && (
                 <div className="px-3 pt-3 pb-1">
-                  <PipelineSteps steps={[]} tasks={run.tasks} />
+                    <PipelineSteps
+                      steps={[]}
+                      tasks={run.tasks}
+                      pipelineView={run.pipelineView}
+                    />
                 </div>
               )}
               {run.logContent ? (
                 useEnhancedLog ? (
                   <EnhancedLogPanel logContent={run.logContent} loading={false} currentAgent={null} />
                 ) : (
-                  <pre className="p-3 text-xs text-muted-foreground font-mono bg-black/20 whitespace-pre-wrap break-words">
+                  <pre className="p-3 text-xs text-muted-foreground font-mono whitespace-pre-wrap break-words">
                     {run.logContent}
                   </pre>
                 )

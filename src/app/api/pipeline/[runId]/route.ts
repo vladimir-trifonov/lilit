@@ -54,9 +54,23 @@ export async function GET(
     },
   });
 
+  const pipelineView = tasks.map((t) => ({
+    id: t.graphId ?? t.id,
+    title: t.title,
+    description: t.description,
+    agent: t.assignedAgent ?? "unassigned",
+    role: t.assignedRole ?? undefined,
+    status: t.status,
+    dependsOn: t.dependsOn ?? [],
+    acceptanceCriteria: t.acceptanceCriteria ?? [],
+    outputSummary: t.outputSummary ?? null,
+    order: t.sequenceOrder,
+  }));
+
   return NextResponse.json({
     runId: run.runId,
     logContent: run.logContent ?? null,
     tasks,
+    pipelineView,
   });
 }

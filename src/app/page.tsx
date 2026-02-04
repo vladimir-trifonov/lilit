@@ -24,14 +24,7 @@ export default function Home() {
   const [activeProject, setActiveProject] = useState<Project | null>(null);
   const [isCollapsed, setIsCollapsed] = useLocalStorageState(SIDEBAR_COLLAPSED_KEY, false);
   const [runningProjectIds, setRunningProjectIds] = useState<Set<string>>(new Set());
-  const [splashDone, setSplashDone] = useState(false);
-
-  // Sync splash state from localStorage after mount to avoid SSR hydration mismatch
-  useEffect(() => {
-    if (localStorage.getItem(SPLASH_SEEN_KEY) === "1") {
-      setSplashDone(true);
-    }
-  }, []);
+  const [splashDone, setSplashDone] = useLocalStorageState(SPLASH_SEEN_KEY, false);
   const [showNewProjectModal, setShowNewProjectModal] = useState(false);
 
   // Load projects and restore active project from localStorage
@@ -83,8 +76,7 @@ export default function Home() {
 
   const handleSplashComplete = useCallback(() => {
     setSplashDone(true);
-    localStorage.setItem(SPLASH_SEEN_KEY, "1");
-  }, []);
+  }, [setSplashDone]);
 
   const handleProjectCreated = (newProject: { id: string; name: string; path: string }) => {
     const p: Project = { ...newProject, description: null };

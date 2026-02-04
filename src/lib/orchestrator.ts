@@ -14,7 +14,7 @@ import { clearLog, isAborted, resetAbort, appendLog as rawAppendLog, getLogFile 
 import { getAgentRegistry, getProviderConfig } from "./agent-loader";
 import { logEvent, getEventHistory, formatEventsForPrompt } from "./event-log";
 import { formatCost } from "./cost-calculator";
-import { resolveProviderId, getAvailableProviders } from "./providers/index";
+import { resolveProviderId, getAvailableProviders, getBestAvailableModel } from "./providers/index";
 import { parseSettings, type ProjectSettings } from "@/types/settings";
 import { writePlanFile, waitForConfirmation, cleanupPlanFiles } from "./plan-gate";
 import { initializeRelationships } from "./personality";
@@ -94,14 +94,31 @@ export type ProgressEvent = PipelineProgressEvent;
 // ----- Task persistence helpers -----
 
 /** Create Task records in the DB from a PM plan. */
+type TaskStore = Pick<typeof prisma.task, "create" | "deleteMany">;
+type ProjectStore = Pick<typeof prisma.project, "update" | "findUniqueOrThrow">;
+type PipelineRunStore = Pick<typeof prisma.pipelineRun, "update" | "findUnique" | "create">;
+
+interface OrchestratorStores {
+  task: TaskStore;
+  project: ProjectStore;
+  pipelineRun: PipelineRunStore;
+}
+
+const DEFAULT_STORES: OrchestratorStores = {
+  task: prisma.task,
+  project: prisma.project,
+  pipelineRun: prisma.pipelineRun,
+};
+
 async function createTasksFromPlan(
+  stores: OrchestratorStores,
   projectId: string,
   pipelineRunId: string,
   tasks: PMPlanTask[],
 ): Promise<Map<number, string>> {
   const planIdToDbId = new Map<number, string>();
   for (const t of tasks) {
-    const record = await prisma.task.create({
+    const record = await stores.task.create({
       data: {
         projectId,
         pipelineRunId,
@@ -127,6 +144,7 @@ async function createTasksFromPlan(
 // ----- Model auto-detection & persistence -----
 
 async function resolveAndSaveAgentModels(
+  stores: OrchestratorStores,
   projectId: string,
   settings: ProjectSettings
 ): Promise<ProjectSettings> {
@@ -171,7 +189,7 @@ async function resolveAndSaveAgentModels(
 
   if (dirty) {
     const updated = { ...settings, agents };
-    await prisma.project.update({
+    await stores.project.update({
       where: { id: projectId },
       data: { settings: JSON.stringify(updated) },
     });
@@ -183,7 +201,12 @@ async function resolveAndSaveAgentModels(
 
 // ----- Checkpoint helper -----
 
-async function checkpoint(runId: string, data: Record<string, unknown>, projectId?: string) {
+async function checkpoint(
+  stores: OrchestratorStores,
+  runId: string,
+  data: Record<string, unknown>,
+  projectId?: string
+) {
   const isTerminal = ["completed", "failed", "aborted"].includes(data.status as string);
   let logData: Record<string, unknown> = {};
   if (isTerminal && projectId) {
@@ -198,7 +221,7 @@ async function checkpoint(runId: string, data: Record<string, unknown>, projectI
       }
     } catch {}
   }
-  await prisma.pipelineRun.update({
+  await stores.pipelineRun.update({
     where: { runId },
     data: {
       ...data,
@@ -250,13 +273,15 @@ export async function orchestrate(opts: {
   runId?: string;
   resume?: boolean;
   onProgress?: (event: ProgressEvent) => void;
+  stores?: OrchestratorStores;
 }): Promise<OrchestratorResult> {
   const { projectId, conversationId, userMessage, onProgress } = opts;
+  const stores = opts.stores ?? DEFAULT_STORES;
   const runId = opts.runId ?? `run-${Date.now()}`;
   const emit = onProgress ?? (() => {});
-  const project = await prisma.project.findUniqueOrThrow({ where: { id: projectId } });
+  const project = await stores.project.findUniqueOrThrow({ where: { id: projectId } });
   const baseSettings = parseSettings(project.settings);
-  const projectSettings = await resolveAndSaveAgentModels(projectId, baseSettings);
+  const projectSettings = await resolveAndSaveAgentModels(stores, projectId, baseSettings);
   const steps: StepResult[] = [];
 
   let runningCost = 0;
@@ -271,26 +296,42 @@ export async function orchestrate(opts: {
     // ----- Resume path: load state from DB, skip planning -----
     resetAbort(projectId);
 
-    const existing = await prisma.pipelineRun.findUnique({ where: { runId } });
-    if (!existing || !existing.plan || !existing.taskGraph) {
-      const error = "Cannot resume: pipeline run has no saved plan or task graph";
+    const existing = await stores.pipelineRun.findUnique({ where: { runId } });
+    if (!existing || !existing.plan) {
+      const error = "Cannot resume: pipeline run has no saved plan";
       appendLog(projectId, `\n❌ ${error}\n`);
       return { response: error, steps, runId };
     }
 
     pipelineRunDbId = existing.id;
     plan = JSON.parse(existing.plan) as PMPlan;
-    const savedGraph = JSON.parse(existing.taskGraph) as TaskGraph;
-    const resumeResult = prepareGraphForResume(savedGraph);
-    resumedGraph = resumeResult.graph;
     runningCost = existing.runningCost ?? 0;
 
-    // Build resume trigger so PM knows what happened and decides how to proceed
-    resumeTrigger = {
-      type: "pipeline_resumed",
-      interruptedTasks: resumeResult.interruptedTasks,
-      failedTasks: resumeResult.failedTasks,
-    };
+    if (existing.taskGraph) {
+      // Normal resume: task graph exists from a previous execution
+      const savedGraph = JSON.parse(existing.taskGraph) as TaskGraph;
+      const resumeResult = prepareGraphForResume(savedGraph);
+      resumedGraph = resumeResult.graph;
+
+      resumeTrigger = {
+        type: "pipeline_resumed",
+        interruptedTasks: resumeResult.interruptedTasks,
+        failedTasks: resumeResult.failedTasks,
+      };
+    } else {
+      // Resume after plan rejection: plan exists but was never executed.
+      // Build a fresh graph from the plan — execution starts from scratch.
+      appendLog(projectId, `\n📋 Resuming from rejected plan — building task graph\n`);
+      resumedGraph = buildTaskGraph(plan);
+
+      // Re-create task records in DB (they may have been left from the rejected attempt)
+      try {
+        await stores.task.deleteMany({ where: { pipelineRunId: pipelineRunDbId } });
+        taskMap = await createTasksFromPlan(stores, projectId, pipelineRunDbId, plan.tasks);
+      } catch {
+        // Non-fatal
+      }
+    }
 
     // Restore completed steps from previous run
     if (existing.completedSteps) {
@@ -310,15 +351,9 @@ export async function orchestrate(opts: {
     appendLog(projectId, `📂 Path: ${project.path}\n`);
     appendLog(projectId, `💰 Cost so far: $${runningCost.toFixed(3)}\n`);
     appendLog(projectId, `📊 Tasks: ${Object.keys(resumedGraph.tasks).length} total, ${doneTasks} done\n`);
-    if (resumeResult.interruptedTasks.length > 0) {
-      appendLog(projectId, `⚡ Interrupted: ${resumeResult.interruptedTasks.join(", ")}\n`);
-    }
-    if (resumeResult.failedTasks.length > 0) {
-      appendLog(projectId, `❌ Failed: ${resumeResult.failedTasks.join(", ")}\n`);
-    }
     appendLog(projectId, `⏰ Resumed: ${new Date().toLocaleString()}\n\n`);
 
-    await checkpoint(runId, {
+    await checkpoint(stores, runId, {
       status: "running",
       taskGraph: JSON.stringify(resumedGraph),
     });
@@ -327,11 +362,11 @@ export async function orchestrate(opts: {
     clearLog(projectId);
     resetAbort(projectId);
 
-    const existing = await prisma.pipelineRun.findUnique({ where: { runId } });
+    const existing = await stores.pipelineRun.findUnique({ where: { runId } });
     if (existing) {
       pipelineRunDbId = existing.id;
     } else {
-      const created = await prisma.pipelineRun.create({
+      const created = await stores.pipelineRun.create({
         data: { projectId, conversationId, runId, userMessage, status: "running" },
       });
       pipelineRunDbId = created.id;
@@ -357,7 +392,7 @@ export async function orchestrate(opts: {
       if (!registry[required]) {
         const error = `Required agent "${required}" not found. Ensure agents/${required}/AGENT.md exists.`;
         appendLog(projectId, `\n❌ ${error}\n`);
-        await checkpoint(runId, { status: "failed", error }, projectId);
+        await checkpoint(stores, runId, { status: "failed", error }, projectId);
         return { response: error, steps, runId };
       }
     }
@@ -372,12 +407,14 @@ export async function orchestrate(opts: {
     emit({ type: "agent_start", agent: AGENT.PM, title: "Creating execution plan..." });
     const conversationContext = await getConversationContext(conversationId);
     const pmPrompt = await buildPMPrompt(userMessage, project.path, project.name, historyContext, conversationContext, projectSettings, projectId);
+    const bestModel = await getBestAvailableModel();
     const pmResult = await runAgent({
       agent: AGENT.PM,
       prompt: pmPrompt,
       cwd: project.path,
       projectId,
       settings: projectSettings,
+      taskHint: { provider: bestModel.provider, model: bestModel.model },
       pipelineRunId: pipelineRunDbId,
     });
 
@@ -388,7 +425,7 @@ export async function orchestrate(opts: {
     if (isAborted(projectId)) {
       appendLog(projectId, `\n🛑 Pipeline stopped by user during planning\n`);
       emit({ type: "agent_done", agent: AGENT.PM, message: "Stopped by user" });
-      await checkpoint(runId, { status: "aborted" }, projectId);
+      await checkpoint(stores, runId, { status: "aborted" }, projectId);
       return { response: "Pipeline stopped.", steps, runId };
     }
 
@@ -397,7 +434,7 @@ export async function orchestrate(opts: {
     if (pmParsed.response) {
       appendLog(projectId, `\n💬 PM responded conversationally (no pipeline needed)\n`);
       emit({ type: "agent_done", agent: AGENT.PM, message: "Conversational response" });
-      await checkpoint(runId, { status: "completed" }, projectId);
+      await checkpoint(stores, runId, { status: "completed" }, projectId);
       return { response: pmParsed.response, steps, runId };
     }
 
@@ -405,7 +442,7 @@ export async function orchestrate(opts: {
       const formatted = pmParsed.clarification.map((q, i) => `${i + 1}. ${q}`).join("\n");
       appendLog(projectId, `\n💬 Clarification needed before proceeding:\n${formatted}\n`);
       emit({ type: "agent_done", agent: AGENT.PM, message: "Needs clarification" });
-      await checkpoint(runId, { status: "completed" }, projectId);
+      await checkpoint(stores, runId, { status: "completed" }, projectId);
       return {
         response: `I need a few clarifications before creating a plan:\n\n${formatted}`,
         steps,
@@ -417,7 +454,7 @@ export async function orchestrate(opts: {
     if (!plan) {
       appendLog(projectId, `\n⚠️ Could not parse PM plan from output — raw:\n${pmResult.output.slice(0, 500)}\n`);
       emit({ type: "agent_error", agent: AGENT.PM, message: "Could not parse plan" });
-      await checkpoint(runId, { status: "failed", error: "Could not parse PM plan" }, projectId);
+      await checkpoint(stores, runId, { status: "failed", error: "Could not parse PM plan" }, projectId);
       const sanitized = pmResult.output.replace(/\[PM_PLAN\][\s\S]*?\[\/PM_PLAN\]/g, "").trim();
       return { response: sanitized || "Could not generate a plan. Please try rephrasing.", steps, runId };
     }
@@ -445,7 +482,7 @@ export async function orchestrate(opts: {
     // Create Task records in DB
     if (pipelineRunDbId) {
       try {
-        taskMap = await createTasksFromPlan(projectId, pipelineRunDbId, plan.tasks);
+        taskMap = await createTasksFromPlan(stores, projectId, pipelineRunDbId, plan.tasks);
         appendLog(projectId, `📋 Created ${taskMap.size} task record(s)\n`);
       } catch {
         // Non-fatal
@@ -453,7 +490,7 @@ export async function orchestrate(opts: {
     }
 
     // Checkpoint
-    await checkpoint(runId, {
+    await checkpoint(stores, runId, {
       plan: JSON.stringify(plan),
       pipeline: JSON.stringify(plan.pipeline),
       status: "awaiting_plan",
@@ -493,7 +530,7 @@ export async function orchestrate(opts: {
           data: { notes: confirmation.notes },
         });
 
-        await checkpoint(runId, { status: "failed", error: "Plan rejected by user" }, projectId);
+        await checkpoint(stores, runId, { status: "failed", error: "Plan rejected by user" }, projectId);
 
         return {
           response: `Plan rejected.${confirmation.notes ? ` Notes: ${confirmation.notes}` : ""}`,
@@ -513,7 +550,7 @@ export async function orchestrate(opts: {
         data: {},
       });
 
-      await checkpoint(runId, { status: "running" });
+      await checkpoint(stores, runId, { status: "running" });
     } catch {
       appendLog(projectId, `\n⚡ Plan auto-confirmed (no response within timeout)\n\n`);
     } finally {
@@ -522,7 +559,7 @@ export async function orchestrate(opts: {
   }
 
   if (!plan) {
-    await checkpoint(runId, { status: "failed", error: "No plan available" }, projectId);
+    await checkpoint(stores, runId, { status: "failed", error: "No plan available" }, projectId);
     return { response: "No plan available for execution.", steps, runId };
   }
 
@@ -533,7 +570,7 @@ export async function orchestrate(opts: {
   const graph = resumedGraph ?? buildTaskGraph(plan);
 
   // Save initial graph
-  await checkpoint(runId, { taskGraph: JSON.stringify(graph) });
+  await checkpoint(stores, runId, { taskGraph: JSON.stringify(graph) });
 
   const loopResult = await runPMDecisionLoop({
     projectId,
@@ -556,7 +593,7 @@ export async function orchestrate(opts: {
   // 4. Generate summary
   appendLog(projectId, `\n${"=".repeat(80)}\n📝 GENERATING SUMMARY\n${"=".repeat(80)}\n`);
   emit({ type: "summary", title: "Generating summary..." });
-  const summary = await generateSummary(userMessage, steps);
+  const summary = await generateSummary(userMessage, steps, project.path);
 
   // 4.5 Generate team standup
   let standupResult: StandupResult | undefined;
@@ -567,6 +604,7 @@ export async function orchestrate(opts: {
       standupResult = await generateStandup({
         pipelineRunId: pipelineRunDbId,
         projectId,
+        cwd: project.path,
         userMessage,
         steps,
         plan,
@@ -596,7 +634,7 @@ export async function orchestrate(opts: {
   appendLog(projectId, `❌ Failed: ${steps.filter(s => s.status === "failed").length}\n`);
   appendLog(projectId, `💰 Total cost: ${formatCost(runningCost)}\n\n`);
 
-  await checkpoint(runId, {
+  await checkpoint(stores, runId, {
     status: "completed",
     runningCost,
     completedSteps: JSON.stringify(steps),

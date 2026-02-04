@@ -53,3 +53,57 @@ export const PROVIDER_MODELS: Record<string, readonly string[]> = {
   "claude-api": CLAUDE_API_MODELS,
   "antigravity": ANTIGRAVITY_MODELS,
 };
+
+/**
+ * Dynamically determine model capability tier based on name keywords and versioning.
+ * Removes the need to hardcode specific model revisions.
+ */
+export function getModelCapabilityTier(modelId: string): number {
+  const lower = modelId.toLowerCase();
+  
+  // 1. Base score by family family keywords
+  let score = 0;
+  if (lower.includes("opus")) score = 80;
+  else if (lower.includes("sonnet") || lower.includes("sonet")) score = 60;
+  else if (lower.includes("pro")) score = 55;
+  else if (lower.includes("flash")) score = 35;
+  else if (lower.includes("haiku")) score = 20;
+  else return DEFAULT_CAPABILITY_TIER;
+
+  // 2. Version parsing (x.y)
+  const versionMatch = lower.match(/(\d+)(?:\.|-)(\d+)/);
+  if (versionMatch) {
+    const major = parseInt(versionMatch[1], 10);
+    const minor = parseInt(versionMatch[2], 10);
+    const versionNum = major + minor / 10;
+    
+    if (versionNum >= 4.5) score += 20;
+    else if (versionNum >= 4.0) score += 15;
+    else if (versionNum >= 3.5) score += 10;
+    else if (versionNum >= 3.0) score += 5;
+    else if (versionNum >= 2.5) score += 5;
+  } else {
+    // Single digit major version
+    const singleV = lower.match(/(?:-)(\d+)(?:-|$)/);
+    if (singleV) {
+      const v = parseInt(singleV[1], 10);
+      if (v >= 4) score += 15;
+      else if (v >= 3) score += 5;
+    }
+  }
+
+  // 3. Suffix Modifiers
+  if (lower.includes("-high")) score += 10;
+  if (lower.includes("-low")) score -= 10;
+  if (lower.includes("-thinking")) score += 5;
+
+  // 4. Special Context: Bare model names (Claude Code CLI)
+  if (CLAUDE_MODELS.some(m => m === lower)) {
+    if (lower === "opus") return 100;
+    score += 10;
+  }
+
+  return Math.min(Math.max(score, 1), 100);
+}
+
+export const DEFAULT_CAPABILITY_TIER = 50;

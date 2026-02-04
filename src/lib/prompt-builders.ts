@@ -338,9 +338,27 @@ export function parsePMOutput(raw: string): {
           return { plan: null, clarification: [qMatch[1]], response: null };
         }
       }
+      // Try quoted "message": "..." (JSON-like)
       const msgMatch = inner.match(/"message"\s*:\s*"((?:[^"\\]|\\.)*)"/);
       if (msgMatch) {
         return { plan: null, clarification: null, response: msgMatch[1] };
+      }
+      // Try unquoted YAML-like `type : response` + `message : ...` (haiku format)
+      const typeMatch = inner.match(/type\s*:\s*response/i);
+      if (typeMatch) {
+        const unquotedMsg = inner.match(/message\s*:\s*([\s\S]+)/i);
+        if (unquotedMsg) {
+          return { plan: null, clarification: null, response: unquotedMsg[1].trim() };
+        }
+      }
+      // If inner content has no plan-like structure, treat it as conversational text
+      const looksLikePlan = /\btasks?\b/i.test(inner) && /\bagent\b/i.test(inner) && /\bdependsOn\b/i.test(inner);
+      if (!looksLikePlan) {
+        // Strip any "DATA JSON" preamble the model sometimes emits
+        const cleaned = inner.replace(/^\s*DATA\s*JSON\s*/i, "").trim();
+        if (cleaned) {
+          return { plan: null, clarification: null, response: cleaned };
+        }
       }
       const stripped = raw.replace(/\[PM_PLAN\][\s\S]*?\[\/PM_PLAN\]/g, "").trim();
       return { plan: null, clarification: null, response: stripped || null };
@@ -350,6 +368,15 @@ export function parsePMOutput(raw: string): {
   }
 
   if (parsed.type === "response") {
+    // Safety check: if the "response" message describes development tasks,
+    // the PM misclassified — return null so the orchestrator treats it as a
+    // failed parse rather than silently skipping the pipeline.
+    const msg = (parsed.message || "").toLowerCase();
+    const describesTasks = /\btask\s*\d/i.test(parsed.message || "") &&
+      (/\b(implement|create|build|develop|initialize|set up|write|add|fix)\b/i.test(msg));
+    if (describesTasks) {
+      return { plan: null, clarification: null, response: null };
+    }
     return { plan: null, clarification: null, response: parsed.message || null };
   }
 
