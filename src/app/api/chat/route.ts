@@ -4,7 +4,7 @@ import { spawn } from "child_process";
 import path from "path";
 import fs from "fs";
 import os from "os";
-import { WORKER_TIMEOUT_MS, MESSAGE_FILE_PREFIX, WORKER_STDERR_MAX_LENGTH } from "@/lib/constants";
+import { WORKER_TIMEOUT_MS, MESSAGE_FILE_PREFIX, WORKER_STDERR_MAX_LENGTH, CHAT_MESSAGE_PAGE_SIZE, TASKS_PER_RUN_LIMIT } from "@/lib/constants";
 import { writeUserMessage } from "@/lib/user-message-gate";
 
 export const dynamic = "force-dynamic";
@@ -103,7 +103,6 @@ export async function POST(req: Request) {
       steps?: unknown[];
       standup?: { messages: unknown[]; totalCost: number };
       agentMessages?: unknown[];
-      adaptations?: unknown[];
       error?: string;
       runId?: string;
     }>((resolve) => {
@@ -146,12 +145,53 @@ export async function POST(req: Request) {
     });
 
     if (result.success && result.response) {
+      // Fetch final tasks for metadata persistence
+      const effectiveRunId = result.runId ?? runId;
+      let finalTasks: unknown[] = [];
+      try {
+        const pipelineRun = await prisma.pipelineRun.findUnique({
+          where: { runId: effectiveRunId },
+          select: { id: true },
+        });
+        if (pipelineRun) {
+          finalTasks = await prisma.task.findMany({
+            where: { pipelineRunId: pipelineRun.id },
+            orderBy: { sequenceOrder: "asc" },
+            take: TASKS_PER_RUN_LIMIT,
+            select: {
+              id: true,
+              title: true,
+              description: true,
+              assignedAgent: true,
+              assignedRole: true,
+              status: true,
+              sequenceOrder: true,
+              graphId: true,
+              dependsOn: true,
+              acceptanceCriteria: true,
+              outputSummary: true,
+              costUsd: true,
+              startedAt: true,
+              completedAt: true,
+            },
+          });
+        }
+      } catch {
+        // Non-fatal — tasks just won't be in metadata
+      }
+
       await prisma.message.create({
         data: {
           conversationId: conversation.id,
           role: "assistant",
           content: result.response,
-          metadata: JSON.stringify({ steps: result.steps, standup: result.standup, agentMessages: result.agentMessages, adaptations: result.adaptations }),
+          metadata: JSON.stringify({
+            steps: result.steps,
+            tasks: finalTasks,
+            runId: effectiveRunId,
+            standup: result.standup,
+            agentMessages: result.agentMessages,
+          }),
         },
       });
 
@@ -165,12 +205,17 @@ export async function POST(req: Request) {
         steps: result.steps,
         standup: result.standup,
         agentMessages: result.agentMessages,
-        adaptations: result.adaptations,
         conversationId: conversation.id,
         runId: result.runId ?? runId,
       });
     } else {
       const errorMessage = result.error || "Pipeline failed";
+
+      // Mark PipelineRun as failed so the UI stops showing "working..."
+      await prisma.pipelineRun.updateMany({
+        where: { runId, status: { in: ["running", "awaiting_plan"] } },
+        data: { status: "failed", error: errorMessage },
+      });
 
       await prisma.message.create({
         data: {
@@ -184,6 +229,13 @@ export async function POST(req: Request) {
     }
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : "Unknown error";
+
+    // Mark PipelineRun as failed on spawn/parse errors
+    await prisma.pipelineRun.updateMany({
+      where: { runId, status: { in: ["running", "awaiting_plan"] } },
+      data: { status: "failed", error: errorMessage },
+    }).catch(() => {});
+
     return NextResponse.json({ error: errorMessage }, { status: 500 });
   }
 }
@@ -192,6 +244,9 @@ export async function GET(req: Request) {
   const { searchParams } = new URL(req.url);
   const projectId = searchParams.get("projectId");
   const conversationId = searchParams.get("conversationId");
+  const cursor = searchParams.get("cursor"); // ISO date string — fetch messages before this
+  const limitParam = searchParams.get("limit");
+  const limit = limitParam ? Math.min(parseInt(limitParam, 10) || CHAT_MESSAGE_PAGE_SIZE, 200) : CHAT_MESSAGE_PAGE_SIZE;
 
   if (!projectId && !conversationId) {
     return NextResponse.json(
@@ -203,30 +258,55 @@ export async function GET(req: Request) {
   let conversation;
 
   if (conversationId) {
-    // Get specific conversation
     conversation = await prisma.conversation.findUnique({
       where: { id: conversationId },
-      include: {
-        messages: {
-          orderBy: { createdAt: "asc" },
-        },
-      },
+      select: { id: true },
     });
   } else {
-    // Get latest conversation for project
     conversation = await prisma.conversation.findFirst({
       where: { projectId: projectId! },
       orderBy: { updatedAt: "desc" },
-      include: {
-        messages: {
-          orderBy: { createdAt: "asc" },
-        },
-      },
+      select: { id: true },
     });
   }
 
+  if (!conversation) {
+    return NextResponse.json({
+      conversationId: null,
+      messages: [],
+      hasMore: false,
+      nextCursor: null,
+    });
+  }
+
+  // Cursor-based pagination: fetch newest `limit + 1` messages before cursor (desc),
+  // then reverse to chronological order.
+  const whereClause: Record<string, unknown> = { conversationId: conversation.id };
+  if (cursor) {
+    const cursorDate = new Date(cursor);
+    if (!isNaN(cursorDate.getTime())) {
+      whereClause.createdAt = { lt: cursorDate };
+    }
+  }
+
+  const rows = await prisma.message.findMany({
+    where: whereClause,
+    orderBy: { createdAt: "desc" },
+    take: limit + 1,
+  });
+
+  const hasMore = rows.length > limit;
+  if (hasMore) rows.pop();
+
+  // Reverse to chronological order
+  rows.reverse();
+
+  const nextCursor = hasMore && rows.length > 0 ? rows[0].createdAt.toISOString() : null;
+
   return NextResponse.json({
-    conversationId: conversation?.id || null,
-    messages: conversation?.messages ?? [],
+    conversationId: conversation.id,
+    messages: rows,
+    hasMore,
+    nextCursor,
   });
 }

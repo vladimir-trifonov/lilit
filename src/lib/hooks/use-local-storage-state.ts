@@ -17,6 +17,11 @@ export function useLocalStorageState<T>(
 ): [T, (v: T | ((prev: T) => T)) => void] {
   const defaultRef = useRef(defaultValue);
   const listenersRef = useRef(new Set<() => void>());
+  // Cache the last raw string and parsed value so getSnapshot returns a stable
+  // reference when the underlying data hasn't changed. Without this,
+  // JSON.parse returns a new object on every call, causing useSyncExternalStore
+  // to re-render infinitely.
+  const cacheRef = useRef<{ raw: string | null; value: T }>({ raw: null, value: defaultValue });
 
   const subscribe = useCallback(
     (onStoreChange: () => void) => {
@@ -38,8 +43,13 @@ export function useLocalStorageState<T>(
 
   const getSnapshot = useCallback((): T => {
     try {
-      const stored = localStorage.getItem(key);
-      if (stored !== null) return JSON.parse(stored) as T;
+      const raw = localStorage.getItem(key);
+      if (raw !== null) {
+        if (raw === cacheRef.current.raw) return cacheRef.current.value;
+        const parsed = JSON.parse(raw) as T;
+        cacheRef.current = { raw, value: parsed };
+        return parsed;
+      }
     } catch {
       // corrupt or unavailable
     }

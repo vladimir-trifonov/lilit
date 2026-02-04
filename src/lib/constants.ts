@@ -9,13 +9,31 @@
  * - Convention file list → `@/lib/memory-ingestion` (domain list)
  */
 
+import path from "path";
+
+/** Resolved absolute path of the Lilit app root (computed once at import). */
+export const CREW_APP_ROOT = path.resolve(process.cwd());
+
 // ── Timeouts (ms) ───────────────────────────────────────────────────────────
 
-/** Default timeout for a single Claude Code CLI execution (30 min). */
-export const CLI_TIMEOUT_MS = 1_800_000;
+/** Default timeout for a single Claude Code CLI execution (15 min).
+ *  Health checks detect stale processes at TASK_STALE_THRESHOLD_MS (5 min);
+ *  this is the hard kill for a CLI that is still producing output but never finishing. */
+export const CLI_TIMEOUT_MS = 900_000;
 
-/** Maximum wall-clock time for the entire worker process (60 min). */
-export const WORKER_TIMEOUT_MS = 3_600_000;
+/** Timeout for a single task execution in the PM decision loop (18 min).
+ *  Slightly longer than CLI_TIMEOUT_MS so the CLI timeout fires first. */
+export const TASK_EXECUTION_TIMEOUT_MS = 1_080_000;
+
+/** How often the decision loop checks liveness while tasks run (30s). */
+export const TASK_HEALTH_CHECK_INTERVAL_MS = 30_000;
+
+/** If the log file hasn't been updated for this long, consider tasks stale (5 min). */
+export const TASK_STALE_THRESHOLD_MS = 300_000;
+
+/** Maximum wall-clock time for the entire worker process (25 min).
+ *  Outermost safety net — kills the worker if the decision loop itself hangs. */
+export const WORKER_TIMEOUT_MS = 1_500_000;
 
 /** How long to wait for the user to confirm/reject a plan (10 min). */
 export const PLAN_CONFIRMATION_TIMEOUT_MS = 600_000;
@@ -28,6 +46,15 @@ export const ABORT_CHECK_INTERVAL_MS = 3_000;
 
 /** Grace period between SIGTERM and SIGKILL when aborting a CLI process. */
 export const SIGKILL_DELAY_MS = 5_000;
+
+/** How often the worker writes a heartbeat timestamp to PipelineRun.heartbeatAt. */
+export const WORKER_HEARTBEAT_INTERVAL_MS = 60_000;
+
+/** Pipeline GET auto-fails runs whose heartbeat is older than this (10 min). */
+export const PIPELINE_STALE_THRESHOLD_MS = 600_000;
+
+/** Fast-path stale threshold when the worker PID is confirmed dead (2 min). */
+export const PIPELINE_DEAD_PID_THRESHOLD_MS = 120_000;
 
 /** Delay before retrying a transient error on the same provider. */
 export const TRANSIENT_RETRY_DELAY_MS = 2_000;
@@ -51,9 +78,6 @@ export const TOKEN_REFRESH_BUFFER_MS = 300_000;
 export const RATE_LIMIT_COOLDOWN_MS = 60_000;
 
 // ── Pipeline limits ─────────────────────────────────────────────────────────
-
-/** Max number of QA/review failure → fix cycles before giving up. */
-export const MAX_FIX_CYCLES = 3;
 
 /** Max attempts to execute a single agent (same provider + cross-provider). */
 export const MAX_AGENT_ATTEMPTS = 3;
@@ -93,16 +117,13 @@ export const MEMORY_CONTENT_MAX_LENGTH = 3_000;
 // ── Truncation limits (prompt building) ─────────────────────────────────────
 
 /** Preview length for assistant messages in conversation context. */
-export const ASSISTANT_MESSAGE_PREVIEW_LENGTH = 300;
+export const ASSISTANT_MESSAGE_PREVIEW_LENGTH = 800;
 
 /** Max chars of code changes injected into review/fix prompts. */
 export const CODE_CHANGES_PREVIEW_LENGTH = 5_000;
 
 /** Max chars of issues injected into fix prompts. */
 export const ISSUES_PREVIEW_LENGTH = 5_000;
-
-/** Max chars of failed output in re-evaluation prompts. */
-export const FAILED_OUTPUT_PREVIEW_LENGTH = 3_000;
 
 /** Max chars of step output in summary generation. */
 export const STEP_OUTPUT_SUMMARY_LENGTH = 500;
@@ -315,12 +336,58 @@ export const PM_QUESTION_TIMEOUT_MS = 600_000;
 /** Max chars of task output included in PM decision context summaries. */
 export const TASK_OUTPUT_SUMMARY_LENGTH = 500;
 
+// ── Stream-JSON (Claude Code CLI) ────────────────────────────────────────────
+
+/** Event type strings emitted by `claude -p --output-format stream-json`. */
+export const STREAM_EVENT_SYSTEM = "system";
+export const STREAM_EVENT_ASSISTANT = "assistant";
+export const STREAM_EVENT_TOOL = "tool";
+export const STREAM_EVENT_RESULT = "result";
+
+/** System-event subtypes that carry no useful content for logs. */
+export const STREAM_FILTERED_SUBTYPES: ReadonlySet<string> = new Set([
+  "hook_started",
+  "hook_response",
+]);
+
+/** Emoji prefix for tool-use activity lines in the log. */
+export const TOOL_USE_LOG_PREFIX = "🔧";
+
 // ── Misc ────────────────────────────────────────────────────────────────────
 
 export const TOKENS_PER_MILLION = 1_000_000;
 export const COST_DISPLAY_PRECISION_THRESHOLD = 0.01;
 export const MIN_OUTPUT_LENGTH_FOR_SIGNALS = 50;
 export const SUMMARY_MAX_WORDS = 400;
+
+// ── Team chat window ──────────────────────────────────────────────────────
+
+/** Polling interval for real-time agent messages in team chat window. */
+export const TEAM_CHAT_POLL_INTERVAL_MS = 2_000;
+
+/** Default width of the floating team chat window (px). */
+export const TEAM_CHAT_DEFAULT_WIDTH = 420;
+
+/** Default height of the floating team chat window (px). */
+export const TEAM_CHAT_DEFAULT_HEIGHT = 480;
+
+/** Minimum width the team chat window can be resized to (px). */
+export const TEAM_CHAT_MIN_WIDTH = 320;
+
+/** Minimum height the team chat window can be resized to (px). */
+export const TEAM_CHAT_MIN_HEIGHT = 280;
+
+/** Maximum width the team chat window can be resized to (px). */
+export const TEAM_CHAT_MAX_WIDTH = 800;
+
+/** Maximum height the team chat window can be resized to (px). */
+export const TEAM_CHAT_MAX_HEIGHT = 900;
+
+/** localStorage key for team chat window position/size/state. */
+export const TEAM_CHAT_STATE_KEY = "lilit-team-chat-state";
+
+/** Maximum number of agent messages to fetch per poll. */
+export const TEAM_CHAT_MESSAGE_LIMIT = 200;
 
 // ── Query limits ────────────────────────────────────────────────────────────
 
@@ -330,5 +397,29 @@ export const PROJECT_LIST_LIMIT = 100;
 /** Default pagination limit for agent run cost queries. */
 export const COST_QUERY_LIMIT = 1000;
 
+/** Number of past pipeline runs to return alongside the active run. */
+export const PAST_RUNS_LIMIT = 10;
+
 /** Maximum length of worker stderr output logged per chunk. */
 export const WORKER_STDERR_MAX_LENGTH = 500;
+
+/** Page size for cursor-based chat message pagination. */
+export const CHAT_MESSAGE_PAGE_SIZE = 50;
+
+/** Page size for agent message backward pagination. */
+export const AGENT_MESSAGE_PAGE_SIZE = 100;
+
+/** Max chars of log content persisted to PipelineRun.logContent on completion. */
+export const LOG_CONTENT_MAX_LENGTH = 500_000;
+
+/** Max tasks fetched per pipeline run query. */
+export const TASKS_PER_RUN_LIMIT = 200;
+
+/** Max standup messages fetched for trend analysis. */
+export const STANDUP_TRENDS_LIMIT = 500;
+
+/** Max active pipeline runs returned by the active indicator endpoint. */
+export const ACTIVE_PIPELINE_LIMIT = 50;
+
+/** Max inbox messages fetched per agent per pipeline run. */
+export const INBOX_MESSAGE_LIMIT = 200;

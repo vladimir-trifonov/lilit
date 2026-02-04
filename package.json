@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "prisma migrate deploy && next dev",
+    "dev": "prisma migrate deploy && next dev -p ${PORT:-51000}",
     "build": "next build",
     "start": "next start",
     "lint": "eslint"
@@ -22,6 +22,7 @@
     "clsx": "^2.1.1",
     "dotenv": "^17.2.3",
     "js-yaml": "^4.1.1",
+    "json-to-plain-text": "^1.2.0",
     "lucide-react": "^0.563.0",
     "motion": "^12.30.0",
     "next": "16.1.6",
@@ -29,7 +30,10 @@
     "prisma": "^7.3.0",
     "react": "19.2.3",
     "react-dom": "19.2.3",
+    "react-markdown": "^10.1.0",
     "react-resizable-panels": "^4.5.8",
+    "react-rnd": "^10.5.2",
+    "remark-breaks": "^4.0.0",
     "tailwind-merge": "^3.4.0"
   },
   "devDependencies": {

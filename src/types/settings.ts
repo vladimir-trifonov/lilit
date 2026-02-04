@@ -24,10 +24,8 @@ export interface ProjectSettings {
   personalityEnabled?: boolean; // Enable agent personalities + RAG memory (default: true)
   voiceEnabled?: boolean; // Enable TTS voice for standups (default: false)
   voiceProvider?: VoiceProvider; // TTS provider (default: "openai")
-  adaptivePipelineEnabled?: boolean; // Enable PM mid-execution pipeline adaptation (default: false)
   debateEnabled?: boolean; // Enable inter-agent debates when opinions clash (default: true when personalityEnabled)
   debateAggressiveness?: number; // 0-1, affects debate trigger threshold (default: 0.5)
-  dynamicOrchestration?: boolean; // Enable PM decision loop instead of sequential pipeline (default: true)
   agents: Record<string, AgentSettings>;
 }
 
@@ -58,10 +56,8 @@ export function mergeSettings(userSettings: Partial<ProjectSettings> | null): Pr
     personalityEnabled: userSettings.personalityEnabled ?? true,
     voiceEnabled: userSettings.voiceEnabled ?? false,
     voiceProvider: userSettings.voiceProvider ?? "openai",
-    adaptivePipelineEnabled: userSettings.adaptivePipelineEnabled ?? false,
     debateEnabled: userSettings.debateEnabled,
     debateAggressiveness: userSettings.debateAggressiveness ?? 0.5,
-    dynamicOrchestration: userSettings.dynamicOrchestration ?? true,
     agents: userSettings.agents ?? {},
   };
 }

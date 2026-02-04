@@ -216,7 +216,7 @@ EventLog → append-only, typed events with JSON data
 3. **SSE output events don't flush**: `agent_start`/`agent_done` SSE events work, but `output` chunk events never reach the browser (likely Next.js dev server buffering). Workaround: file-based polling. → See 7.4.1
 4. **Orphan processes**: Claude Code CLI IDE integration leaves ~20+ background processes. The `--strict-mcp-config` flag prevents interaction, but they consume RAM. → See 7.4.2
 5. **No concurrent agent tracking**: `activeProcess` is a module-level singleton — only one process tracked at a time. → See 7.3.3
-6. **Port conflict**: QA agent starts dev server on port 3000 (same as Lilit). Needs dynamic port or port isolation. → See 7.3.6
+6. **Port conflict**: QA agent starts dev server on port 51000 (same as Lilit). Needs dynamic port or port isolation. → See 7.3.6
 
 ---
 
@@ -338,7 +338,7 @@ GOOGLE_GENERATIVE_AI_API_KEY="..."   # from https://aistudio.google.com/apikey o
 - [ ] **PR creation**: Option to push branch and create GitHub PR with pipeline summary as description
 
 #### 7.3.6 Port Isolation
-- [ ] **Dynamic port assignment**: QA agent gets unique port (3001+) for dev server, avoiding conflict with Lilit on :3000
+- [ ] **Dynamic port assignment**: QA agent gets unique port (51001+) for dev server, avoiding conflict with Lilit on :51000
 - [ ] **Port pool**: Track assigned ports, release on step completion
 - [ ] **Base URL injection**: Pass `BASE_URL=http://localhost:<port>` to QA agent's Playwright config
 
@@ -395,13 +395,15 @@ GOOGLE_GENERATIVE_AI_API_KEY="..."   # from https://aistudio.google.com/apikey o
 cd ~/src/ai/lilit
 npm install
 npx prisma db push   # or npx prisma migrate dev
-npm run dev           # starts on port 3000
+npm run dev           # starts on port 51000
 
 # DB
 psql -U lilit -d lilit  # direct access
 
 # .env
 DATABASE_URL="postgresql://lilit:lilit@localhost:5434/lilit"
+# App server port
+PORT="51000"
 # ANTHROPIC_API_KEY not needed — Claude Code CLI uses subscription auth
 GOOGLE_GENERATIVE_AI_API_KEY="..."  # Gemini for PM/Architect/Summary
 ```

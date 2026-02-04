@@ -7,6 +7,7 @@
 import fs from "fs";
 import path from "path";
 import { getCheapestAvailableModel, getAdapter } from "./providers/registry";
+import { CREW_APP_ROOT } from "@/lib/constants";
 
 /** Max chars to read from a config file for the AI prompt. */
 const CONFIG_FILE_SNIPPET_LENGTH = 2_000;
@@ -157,16 +158,24 @@ export function validateProjectPath(projectPath: string): { valid: boolean; erro
       return { valid: false, error: "Path must be absolute" };
     }
 
-    if (!fs.existsSync(projectPath)) {
+    const resolved = path.resolve(path.normalize(projectPath));
+    if (
+      resolved === CREW_APP_ROOT ||
+      CREW_APP_ROOT.startsWith(resolved + path.sep)
+    ) {
+      return { valid: false, error: "Cannot use the Lilit application directory as a project path" };
+    }
+
+    if (!fs.existsSync(resolved)) {
       return { valid: false, error: "Directory does not exist" };
     }
 
-    const stats = fs.statSync(projectPath);
+    const stats = fs.statSync(resolved);
     if (!stats.isDirectory()) {
       return { valid: false, error: "Path is not a directory" };
     }
 
-    fs.readdirSync(projectPath);
+    fs.readdirSync(resolved);
     return { valid: true };
   } catch (err) {
     return {

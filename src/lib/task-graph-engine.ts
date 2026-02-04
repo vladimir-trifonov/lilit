@@ -6,7 +6,6 @@
  */
 
 import type { TaskGraph, TaskNode, TaskStatus } from "@/types/task-graph";
-import { TASK_OUTPUT_SUMMARY_LENGTH } from "@/lib/constants";
 
 const TERMINAL_STATUSES = new Set<TaskStatus>(["done", "skipped", "cancelled"]);
 const INACTIVE_STATUSES = new Set<TaskStatus>([
@@ -161,17 +160,9 @@ export function getGraphSummary(graph: TaskGraph): string {
   for (const task of tasks) {
     const deps =
       task.dependsOn.length > 0 ? ` (depends: ${task.dependsOn.join(", ")})` : "";
-    const outputHint =
-      task.status === "done" && task.output
-        ? ` — output: ${task.output.slice(0, TASK_OUTPUT_SUMMARY_LENGTH)}`
-        : "";
-    const errorHint =
-      task.status === "failed" && task.error
-        ? ` — error: ${task.error.slice(0, TASK_OUTPUT_SUMMARY_LENGTH)}`
-        : "";
 
     lines.push(
-      `- ${task.id} [${task.status}] ${task.agent}${task.role ? `:${task.role}` : ""}: ${task.title}${deps}${outputHint}${errorHint}`,
+      `- ${task.id} [${task.status}] ${task.agent}${task.role ? `:${task.role}` : ""}: ${task.title}${deps}`,
     );
   }
 
@@ -257,6 +248,59 @@ export function retryTask(
         ...(changes?.role ? { role: changes.role } : {}),
       },
     },
+  };
+}
+
+export interface ResumeResult {
+  graph: TaskGraph;
+  /** Tasks that were "running" at abort time (reset to "ready") */
+  interruptedTasks: string[];
+  /** Tasks that were "failed" (left as-is for PM to decide) */
+  failedTasks: string[];
+}
+
+/**
+ * Normalize a persisted graph for resume after abort/failure.
+ *
+ * Minimal normalization — only resets dead state so the graph isn't
+ * deadlocked. The PM receives the full picture via a `pipeline_resumed`
+ * trigger and decides how to handle failures, retries, and skips.
+ *
+ * - "running" → "ready" (process is dead, must be actionable)
+ * - "blocked" → "ready" (blocking context lost after abort)
+ * - "failed" → unchanged (PM decides: retry, skip, or replace)
+ * - "done" / "skipped" / "cancelled" → unchanged
+ * - "pending" → recalculate readiness based on dependencies
+ */
+export function prepareGraphForResume(graph: TaskGraph): ResumeResult {
+  const updatedTasks: Record<string, TaskNode> = {};
+  const interruptedTasks: string[] = [];
+  const failedTasks: string[] = [];
+
+  for (const [id, task] of Object.entries(graph.tasks)) {
+    if (task.status === "running") {
+      interruptedTasks.push(id);
+      updatedTasks[id] = { ...task, status: "ready" };
+    } else if (task.status === "blocked") {
+      updatedTasks[id] = { ...task, status: "ready", userQuestion: undefined };
+    } else if (task.status === "failed") {
+      failedTasks.push(id);
+      updatedTasks[id] = task;
+    } else if (task.status === "pending") {
+      const allDepsDone = task.dependsOn.every((depId) => {
+        const dep = graph.tasks[depId];
+        return dep && TERMINAL_STATUSES.has(dep.status);
+      });
+      updatedTasks[id] = { ...task, status: allDepsDone ? "ready" : "pending" };
+    } else {
+      updatedTasks[id] = task;
+    }
+  }
+
+  return {
+    graph: { tasks: updatedTasks },
+    interruptedTasks,
+    failedTasks,
   };
 }
 

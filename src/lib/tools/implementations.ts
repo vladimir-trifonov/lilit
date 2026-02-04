@@ -157,6 +157,7 @@ export async function listTasks(
     take: limit,
     select: {
       id: true,
+      graphId: true,
       title: true,
       description: true,
       status: true,
@@ -182,25 +183,34 @@ export async function getTask(
   _projectId: string,
   params: GetTaskParams,
 ): Promise<unknown> {
-  const task = await prisma.task.findUnique({
-    where: { id: params.taskId },
-    include: {
-      notes: { orderBy: { createdAt: "asc" } },
-      children: {
-        select: {
-          id: true,
-          title: true,
-          status: true,
-          assignedAgent: true,
+  // Accept either a DB cuid or a graph ID like "t1", "t2"
+  const isGraphId = /^t\d+$/.test(params.taskId);
+  const task = isGraphId
+    ? await prisma.task.findFirst({
+        where: { graphId: params.taskId },
+        orderBy: { createdAt: "desc" },
+        include: {
+          notes: { orderBy: { createdAt: "asc" } },
+          children: {
+            select: { id: true, title: true, status: true, assignedAgent: true },
+          },
         },
-      },
-    },
-  });
+      })
+    : await prisma.task.findUnique({
+        where: { id: params.taskId },
+        include: {
+          notes: { orderBy: { createdAt: "asc" } },
+          children: {
+            select: { id: true, title: true, status: true, assignedAgent: true },
+          },
+        },
+      });
 
   if (!task) return { error: "Task not found" };
 
   return {
     id: task.id,
+    graphId: task.graphId,
     title: task.title,
     description: task.description,
     acceptanceCriteria: task.acceptanceCriteria,
@@ -322,29 +332,92 @@ export async function getStepOutput(
   _projectId: string,
   params: GetStepOutputParams,
 ): Promise<unknown> {
-  const task = await prisma.task.findUnique({
-    where: { id: params.taskId },
-    select: {
-      id: true,
-      title: true,
-      status: true,
-      output: true,
-      outputSummary: true,
-      assignedAgent: true,
-      assignedRole: true,
-    },
-  });
+  // Accept either a DB cuid or a graph ID like "t1", "t2"
+  const isGraphId = /^t\d+$/.test(params.taskId);
+  const select = {
+    id: true,
+    graphId: true,
+    title: true,
+    status: true,
+    output: true,
+    outputSummary: true,
+    assignedAgent: true,
+    assignedRole: true,
+  } as const;
+
+  const task = isGraphId
+    ? await prisma.task.findFirst({
+        where: { graphId: params.taskId },
+        orderBy: { createdAt: "desc" },
+        select,
+      })
+    : await prisma.task.findUnique({
+        where: { id: params.taskId },
+        select,
+      });
 
   if (!task) return { error: "Task not found" };
 
   return {
     id: task.id,
+    graphId: task.graphId,
     title: task.title,
     status: task.status,
     assignedAgent: task.assignedAgent,
     assignedRole: task.assignedRole,
     output: task.output,
     outputSummary: task.outputSummary,
+  };
+}
+
+// ── get_inbox ────────────────────────────────────────────────────────────
+
+interface GetInboxParams {
+  pipelineRunId?: string;
+}
+
+export async function getInbox(
+  projectId: string,
+  params: GetInboxParams,
+): Promise<unknown> {
+  let pipelineRunDbId = params.pipelineRunId;
+
+  // Find most recent pipeline run if not specified
+  if (!pipelineRunDbId) {
+    const latestRun = await prisma.pipelineRun.findFirst({
+      where: { projectId },
+      orderBy: { createdAt: "desc" },
+      select: { id: true },
+    });
+    if (!latestRun) return { messages: [], total: 0 };
+    pipelineRunDbId = latestRun.id;
+  }
+
+  const messages = await prisma.agentMessage.findMany({
+    where: { pipelineRunId: pipelineRunDbId },
+    orderBy: { createdAt: "asc" },
+    take: 50,
+    select: {
+      id: true,
+      fromAgent: true,
+      fromRole: true,
+      toAgent: true,
+      messageType: true,
+      content: true,
+      createdAt: true,
+    },
+  });
+
+  return {
+    messages: messages.map((m) => ({
+      id: m.id,
+      from: m.fromAgent + (m.fromRole ? `:${m.fromRole}` : ""),
+      to: m.toAgent,
+      type: m.messageType,
+      content: m.content,
+      createdAt: m.createdAt,
+    })),
+    total: messages.length,
   };
 }
 

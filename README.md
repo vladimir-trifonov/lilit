@@ -207,7 +207,7 @@ make setup
 make dev
 ```
 
-Visit `http://localhost:3000` to create your first project.
+Visit `http://localhost:51000` to create your first project.
 
 ### Environment Variables
 
@@ -243,6 +243,7 @@ Visit `http://localhost:3000` to create your first project.
 - [x] Adaptive pipeline (PM modifies plan mid-execution based on live feedback)
 
 **In Progress**
+- [ ] Pagination
 - [ ] Rename Agents to Team Members in the UI
 - [ ] Use context7 mcp and playwright
 - [ ] Telegram integration

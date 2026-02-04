@@ -16,10 +16,13 @@ import { AgentsPanel } from "@/components/agents-panel";
 import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from "@/components/ui/resizable";
 import { usePipeline } from "@/lib/hooks/use-pipeline";
 import { useMessages } from "@/lib/hooks/use-messages";
-import type { StepInfo } from "@/types/pipeline";
+import type { StepInfo, DbTask, PastRun } from "@/types/pipeline";
 import { StandupThread, type StandupMessageData } from "@/components/standup-thread";
 import { AgentMessageThread, type AgentMessageData } from "@/components/agent-message-thread";
 import { PMQuestionCard } from "@/components/pm-question-card";
+import { TeamChatWindow } from "@/components/team-chat-window";
+import ReactMarkdown from "react-markdown";
+import remarkBreaks from "remark-breaks";
 
 interface Project {
   id: string;
@@ -33,11 +36,14 @@ export function Chat({ project }: { project: Project }) {
   const [useEnhancedLog, setUseEnhancedLog] = useLocalStorageState(ENHANCED_LOG_KEY, true);
   const [showAgents, setShowAgents] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
-  const logRef = useRef<HTMLPreElement>(null);
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const topSentinelRef = useRef<HTMLDivElement>(null);
+  const logPanelRef = useRef<HTMLDivElement>(null);
+  const didInitialLogScroll = useRef(false);
 
   const pipeline = usePipeline(project.id);
 
-  const { messages, currentConversationId, input, setInput, handleSend } = useMessages({
+  const { messages, currentConversationId, input, setInput, handleSend, hasMore, loadingMore, loadMore } = useMessages({
     projectId: project.id,
     onSendStart: pipeline.startRun,
     onSendEnd: useCallback(() => {
@@ -48,14 +54,42 @@ export function Chat({ project }: { project: Project }) {
   // Auto-scroll messages (includes loading state so thinking bubble scrolls into view)
   useEffect(() => {
     scrollRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages, pipeline.loading]);
+  }, [messages, pipeline.loading, pipeline.pendingQuestion, pipeline.pendingPlan]);
 
-  // Auto-scroll simple log
+  // Infinite scroll: load older messages when sentinel enters viewport
   useEffect(() => {
-    if (logRef.current) {
-      logRef.current.scrollTop = logRef.current.scrollHeight;
+    const sentinel = topSentinelRef.current;
+    if (!sentinel) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries[0].isIntersecting && hasMore && !loadingMore) {
+          // Preserve scroll position when prepending
+          const container = scrollContainerRef.current;
+          const prevHeight = container?.scrollHeight ?? 0;
+          loadMore().then(() => {
+            if (container) {
+              const newHeight = container.scrollHeight;
+              container.scrollTop += newHeight - prevHeight;
+            }
+          });
+        }
+      },
+      { threshold: 0.1 },
+    );
+    observer.observe(sentinel);
+    return () => observer.disconnect();
+  }, [hasMore, loadingMore, loadMore]);
+
+  // Auto-scroll log panel (both enhanced and simple modes)
+  useEffect(() => {
+    if (!logPanelRef.current) return;
+    if (pipeline.loading) {
+      logPanelRef.current.scrollTop = logPanelRef.current.scrollHeight;
+    } else if (!didInitialLogScroll.current && pipeline.logContent) {
+      logPanelRef.current.scrollTop = logPanelRef.current.scrollHeight;
+      didInitialLogScroll.current = true;
     }
-  }, [pipeline.logContent]);
+  }, [pipeline.logContent, pipeline.loading]);
 
   function handleKeyDown(e: React.KeyboardEvent) {
     if (e.key === "Enter" && !e.shiftKey) {
@@ -66,18 +100,22 @@ export function Chat({ project }: { project: Project }) {
 
   return (
     <>
-      {/* Header */}
-      <div className="h-14 glass-subtle flex items-center px-4 gap-3 z-20">
-        <h2 className="font-medium text-foreground">{project.name}</h2>
-        <span className="text-xs text-muted-foreground font-mono">{project.path}</span>
+      {/* Header - Transparent & Floating */}
+      <div className="relative h-10 flex items-center px-6 gap-3 z-20 shrink-0 border-b border-white/5">
+        <h2 className="font-medium text-foreground/80 text-sm hidden">{project.name}</h2>
+        <span className="text-[10px] text-muted-foreground/50 font-mono tracking-wider">{project.path}</span>
         {/* Project-level cost (always shown) */}
-        <CostDisplay projectId={project.id} compact className="ml-4" />
-        <div className="ml-auto flex items-center gap-2">
+        <CostDisplay projectId={project.id} compact className="ml-4 opacity-70 hover:opacity-100 transition-opacity" />
+        
+        {/* Stylish Gradient Divider */}
+        <div className="absolute bottom-[-1px] left-0 right-0 h-px bg-gradient-to-r from-transparent via-brand/30 to-transparent" />
+        <div className="absolute bottom-[-1px] left-1/4 right-1/4 h-px bg-gradient-to-r from-transparent via-accent/20 to-transparent animate-pulse" />
+        <div className="ml-auto flex items-center gap-1">
           <Button
             variant="ghost"
             size="sm"
             onClick={() => setShowAgents(true)}
-            className="text-xs text-muted-foreground hover:text-foreground"
+            className="text-[10px] text-muted-foreground hover:text-foreground hover:bg-white/5 h-7"
           >
             🤖 Agents
           </Button>
@@ -85,26 +123,24 @@ export function Chat({ project }: { project: Project }) {
             variant="ghost"
             size="sm"
             onClick={() => setShowSettings(true)}
-            className="text-xs text-muted-foreground hover:text-foreground"
+            className="text-[10px] text-muted-foreground hover:text-foreground hover:bg-white/5 h-7"
           >
             ⚙️ Settings
           </Button>
-          {(pipeline.loading || pipeline.logContent) && (
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => setShowLog(!showLog)}
-              className="text-xs text-muted-foreground hover:text-foreground"
-            >
-              {showLog ? "Hide" : "Show"} Log
-            </Button>
-          )}
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => setShowLog(!showLog)}
+            className="text-[10px] text-muted-foreground hover:text-foreground hover:bg-white/5 h-7"
+          >
+            {showLog ? "Hide" : "Show"} Log
+          </Button>
           {pipeline.loading && (
             <Button
               variant="destructive"
               size="sm"
               onClick={pipeline.abort}
-              className="text-xs"
+              className="text-[10px] h-7 px-3 bg-destructive/80 hover:bg-destructive text-white shadow-lg shadow-destructive/20"
             >
               ■ Stop
             </Button>
@@ -113,46 +149,50 @@ export function Chat({ project }: { project: Project }) {
       </div>
 
       {/* Main content area */}
-      <div className="flex-1 min-h-0 h-full overflow-hidden bg-background">
+      <div className="flex-1 min-h-0 h-full overflow-hidden relative">
         <ResizablePanelGroup orientation="horizontal">
-          <ResizablePanel defaultSize={showLog && (pipeline.loading || pipeline.logContent) ? 60 : 100} minSize={30}>
+          <ResizablePanel defaultSize={showLog ? 60 : 100} minSize={30} className="bg-transparent">
             {/* Messages */}
             <ScrollArea className="h-full w-full">
-              <div className="max-w-3xl mx-auto space-y-6 p-6">
+              <div ref={scrollContainerRef} className="max-w-4xl mx-auto space-y-6 p-4 md:p-8 min-h-full pb-40">
+                {/* Sentinel for infinite scroll — triggers loadMore when visible */}
+                <div ref={topSentinelRef} className="h-px w-full" />
+                {loadingMore && (
+                  <div className="flex items-center justify-center py-4">
+                    <span className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-brand border-t-transparent" />
+                  </div>
+                )}
                 {messages.length === 0 && !pipeline.loading && !pipeline.resumableRun && (
-                  <div className="text-center text-muted-foreground py-20 animate-fade-in-up">
-                    <div className="w-16 h-16 rounded-full bg-brand/5 mx-auto mb-4 flex items-center justify-center">
-                       <span className="text-2xl">✨</span>
+                  <div className="flex flex-col items-center justify-center min-h-[50vh] animate-fade-in-up md:px-20">
+                    <div className="w-20 h-20 rounded-3xl bg-gradient-to-br from-brand/20 to-accent/10 border border-white/5 flex items-center justify-center text-4xl mb-6 shadow-2xl shadow-brand/10">
+                       ✨
                     </div>
-                    <p className="text-lg font-medium text-foreground mb-1">Start building</p>
-                    <p className="text-sm">Tell Lilit what to build. I&apos;m ready.</p>
+                    <p className="text-xl font-medium text-foreground mb-2">Start Building</p>
+                    <p className="text-sm text-muted-foreground text-center max-w-sm leading-relaxed">
+                      Lilit is ready. Describe your task, ask a question, or correct a bug.
+                    </p>
                   </div>
                 )}
 
-                {/* Resume banner */}
+                {/* Restart banner for aborted runs */}
                 {pipeline.resumableRun && !pipeline.loading && (
-                  <div className="bg-warning-soft border border-warning/30 rounded-xl p-4 space-y-3 animate-fade-in">
+                  <div className="bg-warning-soft/30 border border-warning/20 rounded-2xl p-5 space-y-3 animate-fade-in backdrop-blur-md">
                     <div className="flex items-center gap-2">
-                      <span className="text-sm font-medium text-warning">Pipeline stopped</span>
-                      <Badge variant="outline" className="text-[10px] border-warning/50 text-warning">
-                        Step {pipeline.resumableRun.currentStep}/{pipeline.resumableRun.totalSteps}
-                      </Badge>
+                       <div className="w-2 h-2 rounded-full bg-warning animate-pulse" />
+                      <span className="text-xs font-semibold text-warning tracking-wide uppercase">Pipeline Paused</span>
                     </div>
-                    <p className="text-xs text-muted-foreground truncate">
+                    <p className="text-sm text-foreground/80">
                       {pipeline.resumableRun.userMessage}
                     </p>
-                    <div className="flex items-center gap-2">
-                      <Button onClick={pipeline.resume} size="sm" className="text-xs shadow-sm">
-                        Resume
-                      </Button>
-                      <Button onClick={pipeline.restart} variant="outline" size="sm" className="text-xs bg-transparent">
-                        Restart
+                    <div className="flex items-center gap-3 pt-1">
+                      <Button onClick={pipeline.restart} size="sm" className="text-xs shadow-lg shadow-warning/20 bg-warning hover:bg-warning/90 text-black border-none">
+                        Resume Run
                       </Button>
                       <Button
                         onClick={pipeline.dismissResumable}
                         variant="ghost"
                         size="sm"
-                        className="text-xs text-muted-foreground"
+                        className="text-xs text-muted-foreground hover:text-foreground"
                       >
                         Dismiss
                       </Button>
@@ -165,78 +205,119 @@ export function Chat({ project }: { project: Project }) {
                 ))}
 
                 {pipeline.loading && (
-                  <div className="space-y-4 py-2 animate-fade-in">
-                    <div className="flex items-center gap-3 text-brand text-sm px-4">
-                      <span className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent" />
-                      <span className="font-medium animate-pulse">Lilit is working...</span>
+                  <div className="space-y-6 py-4 animate-fade-in">
+                    <div className="flex items-center gap-3">
+                      <div className="w-8 h-8 rounded-full bg-brand/10 flex items-center justify-center border border-brand/20">
+                         <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-brand border-t-transparent" />
+                      </div>
+                      <span className="text-sm font-medium text-brand animate-pulse">Lilit is working...</span>
                     </div>
-                    {(pipeline.pipelineSteps.length > 0 || pipeline.tasks.length > 0) && (
-                      <PipelineSteps steps={pipeline.pipelineSteps} tasks={pipeline.tasks} className="ml-6" />
-                    )}
-                    {pipeline.pendingPlan && (
-                      <div className="ml-6">
-                        <PlanConfirmation
-                          projectId={project.id}
-                          runId={pipeline.pendingPlan.runId}
-                          plan={pipeline.pendingPlan.plan as { analysis: string; tasks: { id: number; title: string; description: string; agent: string; role: string; acceptanceCriteria?: string[]; provider?: string; model?: string }[]; pipeline: string[] }}
-                          onConfirmed={pipeline.clearPendingPlan}
-                          onRejected={pipeline.clearPendingPlan}
-                        />
-                      </div>
-                    )}
-                    {pipeline.pendingQuestion && (
-                      <div className="ml-6">
-                        <PMQuestionCard
-                          question={pipeline.pendingQuestion.question}
-                          context={pipeline.pendingQuestion.context}
-                          onAnswer={pipeline.answerQuestion}
-                        />
-                      </div>
-                    )}
-                    {currentConversationId && (
-                      <CostDisplay
-                        projectId={project.id}
-                        conversationId={currentConversationId}
-                        compact
-                        className="ml-6"
-                      />
-                    )}
+                    
+                    <div className="pl-11">
+                         {(pipeline.pipelineSteps.length > 0 || pipeline.tasks.length > 0) && (
+                           <div className="rounded-2xl p-4 border border-border-subtle/50">
+                             <PipelineSteps steps={pipeline.pipelineSteps} tasks={pipeline.tasks} />
+                           </div>
+                         )}
+                         {pipeline.pendingPlan && (
+                           <div className="mt-4">
+                             <PlanConfirmation
+                               projectId={project.id}
+                               runId={pipeline.pendingPlan.runId}
+                               plan={pipeline.pendingPlan.plan as { analysis: string; tasks: { id: number; title: string; description: string; agent: string; role: string; acceptanceCriteria?: string[]; provider?: string; model?: string }[]; pipeline: string[] }}
+                               onConfirmed={pipeline.clearPendingPlan}
+                               onRejected={pipeline.clearPendingPlan}
+                             />
+                           </div>
+                         )}
+                         {pipeline.pendingQuestion && (
+                           <div className="mt-4">
+                             <PMQuestionCard
+                               question={pipeline.pendingQuestion.question}
+                               context={pipeline.pendingQuestion.context}
+                               onAnswer={pipeline.answerQuestion}
+                             />
+                           </div>
+                         )}
+                         {currentConversationId && (
+                           <div className="mt-2">
+                             <CostDisplay
+                               projectId={project.id}
+                               conversationId={currentConversationId}
+                               compact
+                             />
+                           </div>
+                         )}
+                    </div>
                   </div>
                 )}
 
                 <div ref={scrollRef} />
               </div>
             </ScrollArea>
+            
+            {/* Input - Levitating Bar */}
+            <div className="absolute bottom-6 left-0 right-0 px-4 md:px-8 z-30 pointer-events-none">
+              <div className="max-w-3xl mx-auto pointer-events-auto">
+                 <div className="glass-floating rounded-[26px] px-2 py-1.5 flex flex-col gap-1.5 relative group focus-within:ring-1 focus-within:ring-brand/50 transition-all duration-300 ease-out max-h-[72px] group-focus-within:max-h-[200px] overflow-hidden opacity-85 hover:opacity-95 group-focus-within:opacity-100 scale-[0.98] group-focus-within:scale-100">
+                    <Textarea
+                      placeholder={pipeline.loading ? "Running..." : "Ask Lilit..."}
+                      value={input}
+                      onChange={(e) => setInput(e.target.value)}
+                      onKeyDown={handleKeyDown}
+                      rows={1}
+                      className="bg-transparent border-none resize-none min-h-[36px] max-h-[200px] text-[14px] leading-5 px-4 py-1.5 focus-visible:ring-0 placeholder:text-muted-foreground/50"
+                      style={{ boxShadow: 'none' }}
+                    />
+                    <div className="flex items-center justify-between px-2 pb-1 opacity-80 group-focus-within:opacity-100 transition-opacity">
+                       <div className="flex items-center gap-1">
+                          {/* Future attachments or tools buttons could go here */}
+                       </div>
+                       <Button
+                          onClick={handleSend}
+                          disabled={!input.trim()}
+                          className={`rounded-full w-8 h-8 p-0 flex items-center justify-center transition-all duration-300 ${input.trim() ? "bg-brand text-white shadow-lg shadow-brand/25 scale-100" : "bg-white/5 text-white/20 scale-90"}`}
+                          size="icon"
+                        >
+                          <span className="text-xs">↑</span>
+                        </Button>
+                    </div>
+                    
+                    {/* Glow effect on focus */}
+                    <div className="absolute -inset-px rounded-[29px] bg-gradient-to-r from-brand/50 via-accent/50 to-brand/50 opacity-0 group-focus-within:opacity-100 -z-10 blur-md transition-opacity duration-500" />
+                 </div>
+              </div>
+            </div>
+
           </ResizablePanel>
 
-          {showLog && (pipeline.loading || pipeline.logContent) && (
+          {showLog && (
             <>
-              <ResizableHandle withHandle />
-              <ResizablePanel defaultSize={40} minSize={20}>
-                {/* Log panel (right side) — polls /api/logs */}
-                <div className="flex flex-col h-full min-h-0 bg-background/50">
-                  <div className="h-10 glass-subtle flex items-center px-3 gap-2 shrink-0 z-10 border-b border-border-subtle">
-                    <span className="text-xs font-medium text-muted-foreground">📋 Activity Log</span>
+              <ResizableHandle withHandle className="bg-white/5 w-[1px] hover:bg-white/10 transition-colors" />
+              <ResizablePanel defaultSize={40} minSize={20} className="bg-surface/20 backdrop-blur-xl">
+                {/* Log panel (right side) */}
+                <div className="flex flex-col h-full min-h-0">
+                  <div className="h-10 flex items-center px-4 gap-2 shrink-0 border-b border-white/5">
+                    <span className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">Activity Log</span>
                     {pipeline.currentAgent && (
-                      <Badge variant="secondary" className="text-[10px] px-1.5 py-0 bg-brand-soft/50 text-brand-foreground animate-pulse">
+                      <Badge variant="secondary" className="text-[9px] px-1.5 py-0 bg-brand-soft/50 text-brand-foreground border border-brand/20 animate-pulse ml-2">
                         {pipeline.currentAgent}
                       </Badge>
                     )}
                     <div className="ml-auto flex items-center gap-2">
                        {pipeline.loading && (
-                        <div className="flex items-center gap-1.5">
-                           <span className="relative flex h-2 w-2">
+                        <div className="flex items-center gap-1.5 mr-2">
+                           <span className="relative flex h-1.5 w-1.5">
                               <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-brand opacity-75"></span>
-                              <span className="relative inline-flex rounded-full h-2 w-2 bg-brand"></span>
+                              <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-brand"></span>
                             </span>
-                            <span className="text-[10px] text-brand font-medium">LIVE</span>
                         </div>
                       )}
                       <Button
                         onClick={() => setUseEnhancedLog(!useEnhancedLog)}
                         variant="ghost"
                         size="sm"
-                        className="h-6 px-2 text-[10px]"
+                        className="h-6 px-2 text-[10px] text-muted-foreground hover:bg-white/5 rounded-md"
                         title={useEnhancedLog ? "Switch to simple view" : "Switch to enhanced view"}
                       >
                         {useEnhancedLog ? "Simple" : "Enhanced"}
@@ -244,49 +325,76 @@ export function Chat({ project }: { project: Project }) {
                     </div>
                   </div>
 
-                  {useEnhancedLog ? (
-                    <div className="flex-1 min-h-0 overflow-hidden">
-                      <EnhancedLogPanel
-                        logContent={pipeline.logContent}
-                        loading={pipeline.loading}
-                        currentAgent={pipeline.currentAgent}
-                      />
+                  {/* Current pipeline log — scrolls independently, takes remaining space */}
+                  {(pipeline.logContent || pipeline.loading) ? (
+                    <div ref={logPanelRef} className="flex-1 min-h-0 overflow-auto scrollbar-thin scrollbar-thumb-white/10 scrollbar-track-transparent">
+                      {useEnhancedLog ? (
+                        <EnhancedLogPanel
+                          logContent={pipeline.logContent}
+                          loading={pipeline.loading}
+                          currentAgent={pipeline.currentAgent}
+                        />
+                      ) : (
+                        <pre
+                          className="p-4 text-xs text-muted-foreground font-mono whitespace-pre-wrap break-words leading-relaxed"
+                        >
+                          {pipeline.logContent || "Ready..."}
+                        </pre>
+                      )}
                     </div>
-                  ) : (
-                    <pre
-                      ref={logRef}
-                      className="flex-1 p-3 text-xs text-muted-foreground font-mono overflow-auto bg-black/20 whitespace-pre-wrap break-words min-h-0"
-                    >
-                      {pipeline.logContent || "Waiting for output..."}
-                    </pre>
-                  )}
+                  ) : pipeline.pastRuns.length === 0 ? (
+                    <div className="flex-1 min-h-0 overflow-auto scrollbar-thin scrollbar-thumb-white/10 scrollbar-track-transparent">
+                      {useEnhancedLog ? (
+                        <div className="h-full">
+                          <EnhancedLogPanel logContent="" loading={false} currentAgent={null} />
+                        </div>
+                      ) : (
+                        <pre className="flex-1 p-4 text-xs text-muted-foreground font-mono">
+                          Ready...
+                        </pre>
+                      )}
+                    </div>
+                  ) : null}
+
+                  {/* Past pipeline runs — compact when collapsed, expands when an item is open */}
+                  {pipeline.pastRuns.length > 0 && (() => {
+                    const hasCurrentLog = !!(pipeline.logContent || pipeline.loading);
+                    const anyExpanded = pipeline.pastRuns.some(r => r.expanded);
+                    const sizeClass = !hasCurrentLog || anyExpanded ? "flex-1 min-h-0" : "max-h-[50%]";
+                    return (
+                    <div className={`${sizeClass} overflow-auto scrollbar-thin scrollbar-thumb-white/10 scrollbar-track-transparent ${hasCurrentLog ? "border-t border-white/5" : ""}`}>
+                      <div className="px-4 py-3 text-[10px] font-medium text-muted-foreground uppercase tracking-wider bg-white/2 sticky top-0 z-10">
+                        History
+                      </div>
+                      {pipeline.pastRuns.map((run) => (
+                        <PastRunEntry
+                          key={run.runId}
+                          run={run}
+                          useEnhancedLog={useEnhancedLog}
+                          onExpand={pipeline.expandPastRun}
+                          onCollapse={pipeline.collapsePastRun}
+                        />
+                      ))}
+                      {pipeline.hasMorePastRuns && (
+                        <div className="px-3 py-3">
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={pipeline.loadMorePastRuns}
+                            className="w-full text-xs text-muted-foreground hover:bg-white/5"
+                          >
+                            Load more runs
+                          </Button>
+                        </div>
+                      )}
+                    </div>
+                    );
+                  })()}
                 </div>
               </ResizablePanel>
             </>
           )}
         </ResizablePanelGroup>
-      </div>
-
-      {/* Input */}
-      <div className="glass-raised border-t border-border/50 p-4 z-20">
-        <div className="max-w-3xl mx-auto flex gap-3">
-          <Textarea
-            placeholder={pipeline.loading ? "Send a message to the running pipeline..." : "Tell Lilit what to build..."}
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={handleKeyDown}
-            rows={1}
-            className="bg-surface/50 border-border resize-none min-h-[44px] shadow-inner focus:bg-surface transition-all"
-          />
-          <Button
-            onClick={handleSend}
-            disabled={!input.trim()}
-            className="self-end shadow-md hover:shadow-lg transition-all"
-            size="lg"
-          >
-            Send
-          </Button>
-        </div>
       </div>
 
       {/* Settings Panel */}
@@ -298,10 +406,15 @@ export function Chat({ project }: { project: Project }) {
       )}
 
       {/* Agents Panel */}
-      {showAgents && (
+      <div style={{ display: showAgents ? undefined : "none" }}>
         <AgentsPanel onClose={() => setShowAgents(false)} />
-      )}
+      </div>
 
+      {/* Floating Team Chat */}
+      <TeamChatWindow
+        pipelineRunId={pipeline.activeRunId}
+        pipelineLoading={pipeline.loading}
+      />
     </>
   );
 }
@@ -334,17 +447,17 @@ function MessageBubble({ message }: { message: Message }) {
   const isSystem = message.role === "system";
 
   let steps: StepInfo[] = [];
+  let metaTasks: DbTask[] = [];
   let standupMessages: StandupMessageData[] = [];
   let agentMessages: AgentMessageData[] = [];
-  let adaptations: Array<{ afterStep: number; reason?: string; addedSteps?: string[]; removedSteps?: number[]; costUsd: number }> = [];
   let debates: Array<{ challengerAgent: string; defenderAgent: string; triggerOpinion: string; outcome: string; turnCount: number; resolutionNote?: string }> = [];
   if (message.metadata) {
     try {
       const meta = JSON.parse(message.metadata);
       steps = meta.steps || [];
+      metaTasks = meta.tasks || [];
       standupMessages = meta.standup?.messages || [];
       agentMessages = meta.agentMessages || [];
-      adaptations = meta.adaptations || [];
       debates = meta.debates || [];
     } catch {
       // ignore
@@ -352,32 +465,88 @@ function MessageBubble({ message }: { message: Message }) {
   }
 
   return (
-    <div className={`flex ${isUser ? "justify-end" : "justify-start"} animate-fade-in-up`}>
+    <div className={`flex ${isUser ? "justify-end" : "justify-start"} animate-fade-in-up group`}>
       <div
-        className={`max-w-[85%] rounded-xl px-5 py-4 shadow-sm ${
+        className={`max-w-[72%] md:max-w-[68%] rounded-2xl px-4 py-3 shadow-sm relative overflow-hidden backdrop-blur-md transition-all duration-300 ${
           isUser
-            ? "bg-brand text-white shadow-brand/10 rounded-br-none"
+            ? "bg-gradient-to-br from-brand/90 to-accent/80 text-white rounded-br-md shadow-brand/10 border border-white/10"
             : isSystem
-              ? "bg-destructive-soft text-destructive border border-destructive/20"
-              : "glass text-foreground border border-border-subtle rounded-bl-none"
+              ? "bg-destructive-soft text-destructive border border-destructive/20 rounded-bl-md"
+              : "bg-surface-raised/40 text-foreground border border-white/5 rounded-bl-md hover:bg-surface-raised/60 hover:shadow-lg hover:shadow-black/5"
         }`}
       >
+        {/* Glow for AI messages */}
+        {!isUser && !isSystem && (
+           <div className="absolute top-0 left-0 w-full h-[1px] bg-gradient-to-r from-transparent via-white/10 to-transparent opacity-50" />
+        )}
+        
         <div className="flex items-center gap-2 mb-2">
           {!isUser && !isSystem && (
             <div className="flex items-center gap-2">
-               <div className="w-4 h-4 rounded-full bg-brand flex items-center justify-center">
-                  <span className="text-[10px] text-white">L</span>
+               <div className="w-5 h-5 rounded-lg bg-gradient-to-br from-brand to-accent flex items-center justify-center shadow-lg shadow-brand/20">
+                  <span className="text-[10px] text-white font-bold">L</span>
                </div>
-               <span className="text-xs font-semibold text-foreground">Lilit</span>
+               <span className="text-xs font-bold text-foreground/90 tracking-wide">Lilit</span>
             </div>
           )}
-          <span className={`text-[10px] ${isUser ? "text-white/70" : "text-muted-foreground"} ml-auto`}>
+          <span className={`text-[10px] font-medium tracking-wide ${isUser ? "text-white/60" : "text-muted-foreground/60 group-hover:text-muted-foreground transition-colors"} ml-auto`}>
             {formatMessageTime(message.createdAt)}
           </span>
         </div>
-        <div className={`text-sm whitespace-pre-wrap break-words leading-relaxed ${isUser ? "text-white" : ""}`}>{message.content}</div>
+        {isUser ? (
+          <div className="text-[13px] md:text-[14px] whitespace-pre-wrap break-words leading-relaxed text-white/95">{message.content}</div>
+        ) : (
+          <div className="text-[13px] md:text-[14px] break-words leading-relaxed prose-chat text-foreground/90">
+            <ReactMarkdown
+              remarkPlugins={[remarkBreaks]}
+              components={{
+                h1: ({ children }) => <h3 className="text-sm font-bold text-foreground mt-3 mb-1.5 first:mt-0">{children}</h3>,
+                h2: ({ children }) => <h3 className="text-sm font-bold text-foreground mt-3 mb-1.5 first:mt-0">{children}</h3>,
+                h3: ({ children }) => <h4 className="text-[13px] font-semibold text-foreground mt-2.5 mb-1 first:mt-0">{children}</h4>,
+                h4: ({ children }) => <h4 className="text-[13px] font-semibold text-muted-foreground mt-2 mb-1 first:mt-0">{children}</h4>,
+                p: ({ children }) => <p className="mb-2 last:mb-0">{children}</p>,
+                strong: ({ children }) => <strong className="font-semibold text-foreground">{children}</strong>,
+                em: ({ children }) => <em className="text-muted-foreground italic">{children}</em>,
+                ul: ({ children }) => (
+                  <ul className="mb-2 last:mb-0 space-y-0.5 pl-4 list-disc marker:text-brand/50">{children}</ul>
+                ),
+                ol: ({ children }) => (
+                  <ol className="mb-2 last:mb-0 space-y-0.5 pl-4 list-decimal marker:text-brand/50">{children}</ol>
+                ),
+                li: ({ children }) => (
+                  <li className="text-sm pl-0.5">{children}</li>
+                ),
+                code: ({ children, className }) => {
+                  const isBlock = className?.includes("language-");
+                  if (isBlock) {
+                    return (
+                      <pre className="bg-surface rounded-md px-3 py-2 my-2 overflow-x-auto border border-border-subtle">
+                        <code className="text-xs font-mono text-foreground">{children}</code>
+                      </pre>
+                    );
+                  }
+                  return <code className="text-xs font-mono bg-surface/80 px-1 py-0.5 rounded border border-border-subtle text-brand">{children}</code>;
+                },
+                pre: ({ children }) => <>{children}</>,
+                blockquote: ({ children }) => (
+                  <blockquote className="border-l-2 border-brand/30 pl-3 my-2 text-muted-foreground italic">{children}</blockquote>
+                ),
+                hr: () => <hr className="border-border-subtle my-3" />,
+                a: ({ children, href }) => (
+                  <a href={href} target="_blank" rel="noopener noreferrer" className="text-brand underline underline-offset-2 hover:text-brand/80">{children}</a>
+                ),
+              }}
+            >
+              {message.content}
+            </ReactMarkdown>
+          </div>
+        )}
 
-        {steps.length > 0 && (
+        {metaTasks.length > 0 ? (
+          <div className="mt-4 pt-3 border-t border-border-subtle">
+            <PipelineSteps steps={[]} tasks={metaTasks} />
+          </div>
+        ) : steps.length > 0 ? (
           <div className="mt-4 pt-3 border-t border-border-subtle space-y-2">
             <div className="text-xs text-muted-foreground font-medium uppercase tracking-wider">Pipeline Checklist:</div>
             {steps.map((s, i) => (
@@ -397,24 +566,7 @@ function MessageBubble({ message }: { message: Message }) {
               </div>
             ))}
           </div>
-        )}
-
-        {adaptations.length > 0 && (
-          <div className="mt-4 pt-3 border-t border-border-subtle space-y-2">
-            <div className="text-xs text-muted-foreground font-medium uppercase tracking-wider">Pipeline Adaptations:</div>
-            {adaptations.map((a, i) => (
-              <div key={i} className="flex items-start gap-2 text-xs bg-warning-soft/30 p-2 rounded-md">
-                <Badge variant="outline" className="text-[9px] px-1.5 py-0 bg-warning-soft text-warning border-warning/20 shrink-0">
-                  Step {a.afterStep + 1}
-                </Badge>
-                <span className="text-muted-foreground">
-                  {a.reason ?? "Pipeline modified"}
-                  {a.addedSteps && a.addedSteps.length > 0 && ` (+${a.addedSteps.join(", ")})`}
-                </span>
-              </div>
-            ))}
-          </div>
-        )}
+        ) : null}
 
         {debates.length > 0 && (
           <div className="mt-4 pt-3 border-t border-border-subtle space-y-2">
@@ -445,6 +597,99 @@ function MessageBubble({ message }: { message: Message }) {
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+const STATUS_COLORS: Record<string, string> = {
+  completed: "bg-success-soft text-success",
+  failed: "bg-destructive-soft text-destructive",
+  aborted: "bg-warning-soft text-warning",
+  running: "bg-brand-soft text-brand",
+};
+
+function PastRunEntry({
+  run,
+  useEnhancedLog,
+  onExpand,
+  onCollapse,
+}: {
+  run: PastRun;
+  useEnhancedLog: boolean;
+  onExpand: (runId: string) => Promise<void>;
+  onCollapse: (runId: string) => void;
+}) {
+  const toggleExpand = () => {
+    if (run.expanded) {
+      onCollapse(run.runId);
+    } else {
+      onExpand(run.runId);
+    }
+  };
+
+  const label = run.planAnalysis
+    ? run.planAnalysis.slice(0, 120) + (run.planAnalysis.length > 120 ? "..." : "")
+    : run.userMessage.slice(0, 80) + (run.userMessage.length > 80 ? "..." : "");
+
+  return (
+    <div className="border-b border-border-subtle/50">
+      <button
+        onClick={toggleExpand}
+        className="w-full flex items-center gap-2 px-3 py-2 text-left hover:bg-surface/30 transition-colors"
+      >
+        <span className="text-[10px]">{run.expanded ? "▼" : "▶"}</span>
+        <Badge
+          variant="outline"
+          className={`text-[9px] px-1.5 py-0 h-4 shrink-0 ${STATUS_COLORS[run.status] ?? "bg-muted text-muted-foreground"}`}
+        >
+          {run.status}
+        </Badge>
+        <span className="text-[11px] text-foreground truncate flex-1">
+          {label}
+        </span>
+        {run.taskCount != null && run.taskCount > 0 && (
+          <Badge variant="secondary" className="text-[9px] px-1.5 py-0 h-4 shrink-0 bg-surface text-muted-foreground">
+            {run.taskCount} task{run.taskCount !== 1 ? "s" : ""}
+          </Badge>
+        )}
+        <span className="text-[10px] text-faint shrink-0">
+          ${run.runningCost.toFixed(2)}
+        </span>
+        <span className="text-[10px] text-faint shrink-0">
+          {formatMessageTime(run.createdAt)}
+        </span>
+      </button>
+      {run.expanded && (
+        <div className="border-t border-border-subtle/30">
+          {run.loading ? (
+            <div className="flex items-center justify-center py-6">
+              <span className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-brand border-t-transparent" />
+              <span className="ml-2 text-xs text-muted-foreground">Loading...</span>
+            </div>
+          ) : (
+            <>
+              {run.tasks && run.tasks.length > 0 && (
+                <div className="px-3 pt-3 pb-1">
+                  <PipelineSteps steps={[]} tasks={run.tasks} />
+                </div>
+              )}
+              {run.logContent ? (
+                useEnhancedLog ? (
+                  <EnhancedLogPanel logContent={run.logContent} loading={false} currentAgent={null} />
+                ) : (
+                  <pre className="p-3 text-xs text-muted-foreground font-mono bg-black/20 whitespace-pre-wrap break-words">
+                    {run.logContent}
+                  </pre>
+                )
+              ) : (
+                <div className="px-3 py-4 text-xs text-muted-foreground italic">
+                  No log content available for this run.
+                </div>
+              )}
+            </>
+          )}
+        </div>
+      )}
     </div>
   );
 }

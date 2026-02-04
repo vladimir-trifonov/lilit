@@ -13,6 +13,9 @@
 
 | ID | Time | T | Title | Read |
 |----|------|---|-------|------|
+| #2305 | 5:04 AM | ✅ | Added sessionId Field to Task Schema for Session Tracking | ~375 |
+| #2304 | " | 🔵 | Database Schema Shows Project Uses CUID for All Primary Keys | ~438 |
+| #2247 | 4:57 AM | 🔵 | Pipeline Run ID Stored as Unique Indexed Field in Database | ~384 |
 | #1719 | 2:02 AM | 🔵 | Dead Code Analysis Reveals Unused Sequential Pipeline Infrastructure | ~639 |
 | #1714 | 2:01 AM | 🔵 | Complete Mapping of Legacy Sequential Pipeline Code vs Dynamic Orchestration | ~753 |
 | #1713 | " | 🔵 | PipelineRun Schema Stores Sequential Mode State Fields | ~608 |

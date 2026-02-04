@@ -4,14 +4,99 @@
 
 "use client";
 
-import React, { useEffect, useRef, useMemo, type ReactNode } from "react";
+import React, { useState, useEffect, useRef, useMemo, type ReactNode } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { parseLogSections, formatLogLine } from "@/lib/log-highlighter";
 import { useCollapsibleSections } from "@/lib/hooks/use-collapsible-sections";
 import { useSearch } from "@/lib/hooks/use-search";
-import { ShimmeringText } from "@/components/ui/shimmering-text";
+import { jsonToPlainText } from "json-to-plain-text";
+
+type LineChunk =
+  | { type: "text"; line: string }
+  | { type: "json"; raw: string; formatted: string; plainText: string | null };
+
+/** Merge contiguous lines that form JSON objects/arrays into single chunks. */
+function chunkLines(lines: string[]): LineChunk[] {
+  const chunks: LineChunk[] = [];
+  let i = 0;
+  while (i < lines.length) {
+    const trimmed = lines[i].trimStart();
+    if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
+      // Accumulate lines until the JSON block closes (brace counting)
+      let depth = 0;
+      let j = i;
+      const jsonLines: string[] = [];
+      while (j < lines.length) {
+        const line = lines[j];
+        jsonLines.push(line);
+        for (const ch of line) {
+          if (ch === "{" || ch === "[") depth++;
+          else if (ch === "}" || ch === "]") depth--;
+        }
+        j++;
+        if (depth <= 0) break;
+      }
+      const raw = jsonLines.join("\n");
+      try {
+        const parsed = JSON.parse(raw);
+        let plainText: string | null = null;
+        try {
+          plainText = jsonToPlainText(parsed, { seperator: ":", spacing: true });
+        } catch {
+          // plain text conversion failed — will fall back to JSON view
+        }
+        chunks.push({ type: "json", raw, formatted: JSON.stringify(parsed, null, 2), plainText });
+        i = j;
+        continue;
+      } catch {
+        // Not valid JSON — fall through to text
+      }
+    }
+    chunks.push({ type: "text", line: lines[i] });
+    i++;
+  }
+  return chunks;
+}
+
+function DataBlock({ plainText, formatted, searchQuery }: { plainText: string | null; formatted: string; searchQuery: string }) {
+  const [expanded, setExpanded] = useState(false);
+  const [showJson, setShowJson] = useState(!plainText);
+  const displayText = showJson ? formatted : (plainText ?? formatted);
+  const preview = displayText.split("\n").slice(0, 6).join("\n");
+  const isLong = displayText.split("\n").length > 6;
+
+  return (
+    <div className="my-1.5 rounded-md border border-border-subtle bg-black/30 overflow-hidden">
+      <div className="flex items-center gap-2 px-2 py-1">
+        <span className="text-[10px] text-brand font-mono font-medium">{showJson ? "JSON" : "DATA"}</span>
+        {plainText && (
+          <button
+            onClick={() => setShowJson(!showJson)}
+            className="text-[9px] text-faint hover:text-muted-foreground transition-colors"
+          >
+            {showJson ? "Text" : "JSON"}
+          </button>
+        )}
+        {isLong && (
+          <button
+            onClick={() => setExpanded(!expanded)}
+            className="text-[9px] text-faint hover:text-muted-foreground transition-colors ml-auto"
+          >
+            {expanded ? "Collapse" : "Expand"}
+          </button>
+        )}
+      </div>
+      <pre className="px-3 py-2 text-[10px] leading-relaxed overflow-x-auto text-muted-foreground/90 border-t border-border-subtle">
+        {searchQuery
+          ? highlightText(expanded || !isLong ? displayText : preview + "\n  ...", searchQuery)
+          : (expanded || !isLong ? displayText : preview + "\n  ...")}
+      </pre>
+    </div>
+  );
+}
+
 
 /** Split text on search matches and return React elements with <mark> highlights */
 function highlightText(text: string, query: string): ReactNode {
@@ -34,9 +119,18 @@ interface EnhancedLogPanelProps {
 
 export function EnhancedLogPanel({ logContent, loading }: EnhancedLogPanelProps) {
   const logRef = useRef<HTMLDivElement>(null);
+  const didInitialScroll = useRef(false);
 
-  // Parse log into sections
-  const sections = useMemo(() => parseLogSections(logContent), [logContent]);
+  // Parse log into sections, then override "running" status when pipeline is not loading
+  const sections = useMemo(() => {
+    const parsed = parseLogSections(logContent);
+    if (!loading) {
+      for (const s of parsed) {
+        if (s.status === "running") s.status = "done";
+      }
+    }
+    return parsed;
+  }, [logContent, loading]);
 
   // Search + filter
   const { query: searchQuery, setQuery: setSearchQuery, filtered: filteredSections, clear: clearSearch } = useSearch(
@@ -50,10 +144,15 @@ export function EnhancedLogPanel({ logContent, loading }: EnhancedLogPanelProps)
   const { collapsed: collapsedSections, toggle: toggleSection, expandAll, collapseAll } =
     useCollapsibleSections(sections.length);
 
-  // Auto-scroll to bottom when content changes
+  // Auto-scroll to bottom when content changes (during live pipeline)
+  // or on first hydration (page refresh with completed pipeline)
   useEffect(() => {
-    if (logRef.current && loading) {
+    if (!logRef.current) return;
+    if (loading) {
       logRef.current.scrollTop = logRef.current.scrollHeight;
+    } else if (!didInitialScroll.current && logContent) {
+      logRef.current.scrollTop = logRef.current.scrollHeight;
+      didInitialScroll.current = true;
     }
   }, [logContent, loading]);
 
@@ -66,7 +165,7 @@ export function EnhancedLogPanel({ logContent, loading }: EnhancedLogPanelProps)
   }
 
   return (
-    <div className="flex flex-col h-full bg-black/20">
+    <div className="flex flex-col bg-black/20">
       {/* Toolbar */}
       <div className="flex items-center gap-2 p-2 border-b border-border-subtle shrink-0 glass-subtle">
         <div className="relative flex-1">
@@ -126,9 +225,16 @@ export function EnhancedLogPanel({ logContent, loading }: EnhancedLogPanelProps)
             No results for &ldquo;{searchQuery}&rdquo;
           </div>
         ) : filteredSections.length === 0 ? (
-          <div className="text-muted-foreground/50 text-xs whitespace-pre-wrap flex items-center justify-center h-full">
-            {logContent || "Waiting for output..."}
-          </div>
+          logContent ? (
+            <div className="text-muted-foreground/50 text-xs whitespace-pre-wrap">
+              {logContent}
+            </div>
+          ) : (
+            <div className="flex items-center justify-center py-8 text-muted-foreground/50 text-xs">
+              <span className="inline-block h-3.5 w-3.5 animate-spin rounded-full border-2 border-brand border-t-transparent mr-2" />
+              Waiting for output...
+            </div>
+          )
         ) : (
           <div className="space-y-2">
             {filteredSections.map((section, index) => {
@@ -186,12 +292,15 @@ export function EnhancedLogPanel({ logContent, loading }: EnhancedLogPanelProps)
                   {!isCollapsed && (
                     <div className="p-3 border-t border-border-subtle bg-black/20 overflow-x-auto">
                       <div className="text-[11px] leading-relaxed text-muted-foreground/90 space-y-0.5">
-                        {section.content.split("\n").map((line, lineIdx) => {
-                          const { text, className, type } = formatLogLine(line);
-                          if (!line.trim() && lineIdx === section.content.split("\n").length - 1) return null;
+                        {chunkLines(section.content.split("\n")).map((chunk, chunkIdx) => {
+                          if (chunk.type === "json") {
+                            return <DataBlock key={chunkIdx} plainText={chunk.plainText} formatted={chunk.formatted} searchQuery={searchQuery} />;
+                          }
+                          const { text, className, type } = formatLogLine(chunk.line);
+                          if (!chunk.line.trim()) return null;
                           return (
                             <div
-                              key={lineIdx}
+                              key={chunkIdx}
                               className={`${
                                 type === "separator" ? "opacity-30 my-2" : ""
                               } whitespace-pre-wrap break-words`}
@@ -202,16 +311,6 @@ export function EnhancedLogPanel({ logContent, loading }: EnhancedLogPanelProps)
                             </div>
                           );
                         })}
-                        {section.status === "running" && (
-                          <div className="mt-3 pt-2 border-t border-border-subtle/30">
-                            <ShimmeringText
-                              text="Still working..."
-                              className="text-[11px]"
-                              duration={2}
-                              spread={1.5}
-                            />
-                          </div>
-                        )}
                       </div>
                     </div>
                   )}

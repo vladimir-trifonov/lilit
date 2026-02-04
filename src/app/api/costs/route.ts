@@ -28,6 +28,7 @@ export async function GET(req: Request) {
       const pipelineRuns = await prisma.pipelineRun.findMany({
         where: { conversationId },
         select: { id: true },
+        take: COST_QUERY_LIMIT,
       });
 
       if (pipelineRuns.length === 0) {

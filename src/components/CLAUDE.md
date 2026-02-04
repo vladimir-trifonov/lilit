@@ -15,6 +15,24 @@
 
 | ID | Time | T | Title | Read |
 |----|------|---|-------|------|
+| #2374 | 5:20 AM | ✅ | TeamChatWindow refactored to accept external state control | ~369 |
+| #2375 | " | ✅ | Debug PMQuestionCard added to troubleshoot pending question display | ~353 |
+| #2373 | 5:19 AM | 🔴 | Fixed Team Chat Window Drag Position Calculation | ~388 |
+| #2372 | " | 🟣 | Added Motion Values for Team Chat Window Drag Position Tracking | ~317 |
+| #2369 | 5:17 AM | 🔴 | Team Chat Window Now Shows Empty State Instead of Hiding | ~346 |
+| #2368 | " | 🔵 | Team Chat Window Supports Minimized State with Unread Badge | ~369 |
+| #2362 | 5:16 AM | 🟣 | Added Controlled Team Chat Window with Persistent Open/Close State | ~429 |
+| #2356 | 5:15 AM | 🟣 | Added Team Chat Toggle Button to Header | ~335 |
+| #2355 | " | 🟣 | Added Team Chat Open State Persistence to Local Storage | ~305 |
+| #2354 | " | ✅ | Imported TEAM_CHAT_OPEN_KEY Constant for Team Chat State Management | ~348 |
+| #2345 | 5:13 AM | ✅ | Removed Debug PMQuestionCard from Chat Component | ~315 |
+| #2257 | 4:58 AM | 🔴 | Fixed Auto-Scroll to Include PM Question and Plan Updates | ~364 |
+| #2251 | " | 🔵 | Chat Component Passes project.id to usePipeline Hook | ~386 |
+| #2250 | 4:57 AM | 🔵 | Chat Component Conditionally Renders PM Question Card Below Pipeline Steps | ~396 |
+| #2230 | 4:55 AM | 🔵 | Complete PM Question Flow Analysis from Backend to Frontend | ~685 |
+| #2227 | 4:54 AM | 🔵 | PMQuestionCard Rendered Conditionally When Pipeline Has Pending Question | ~486 |
+| #2226 | " | 🔵 | PM Question Card Component Provides Interactive Reply UI for Sasha | ~493 |
+| #2220 | " | 🔵 | Chat Component Includes PMQuestionCard and TeamChatWindow Imports | ~485 |
 | #1723 | 2:04 AM | 🔵 | Chat Component Displays Legacy Pipeline Adaptation Results in UI | ~534 |
 | #1715 | 2:01 AM | 🔵 | Comprehensive Legacy Code Audit Identifies Sequential Pipeline Remnants Across Codebase | ~748 |
 | #1710 | 2:00 AM | 🔵 | Pipeline Steps Component Supports Both Sequential and Task Graph Rendering Modes | ~590 |

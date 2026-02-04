@@ -17,6 +17,7 @@
 
 import { prisma } from "./prisma";
 import { getCodename } from "./personality";
+import { INBOX_MESSAGE_LIMIT, TEAM_CHAT_MESSAGE_LIMIT } from "@/lib/constants";
 
 // ---- Types ----
 
@@ -174,6 +175,7 @@ export async function getInboxMessages(opts: {
       toAgent: opts.toAgent,
     },
     orderBy: { createdAt: "asc" },
+    take: INBOX_MESSAGE_LIMIT,
   });
 }
 
@@ -184,6 +186,7 @@ export async function getAllMessages(pipelineRunId: string): Promise<StoredAgent
   return prisma.agentMessage.findMany({
     where: { pipelineRunId },
     orderBy: { createdAt: "asc" },
+    take: TEAM_CHAT_MESSAGE_LIMIT,
   });
 }
 

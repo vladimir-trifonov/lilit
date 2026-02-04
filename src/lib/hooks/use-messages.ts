@@ -17,6 +17,9 @@ export interface UseMessagesResult {
   input: string;
   setInput: (v: string) => void;
   handleSend: () => Promise<void>;
+  hasMore: boolean;
+  loadingMore: boolean;
+  loadMore: () => Promise<void>;
 }
 
 interface UseMessagesOptions {
@@ -29,6 +32,7 @@ interface UseMessagesOptions {
 
 /**
  * Manages chat messages, conversation tracking, and message submission.
+ * Supports cursor-based pagination for loading older messages.
  */
 export function useMessages({
   projectId,
@@ -38,6 +42,9 @@ export function useMessages({
   const [messages, setMessages] = useState<Message[]>([]);
   const [currentConversationId, setCurrentConversationId] = useState<string | null>(null);
   const [input, setInput] = useState("");
+  const [hasMore, setHasMore] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const nextCursorRef = useRef<string | null>(null);
   const onSendStartRef = useRef(onSendStart);
   const onSendEndRef = useRef(onSendEnd);
   onSendStartRef.current = onSendStart;
@@ -51,9 +58,12 @@ export function useMessages({
         : `/api/chat?projectId=${projectId}`;
 
       const res = await apiFetch(url);
+      if (!res.ok) return;
       const data = await res.json();
 
       setMessages(data.messages || []);
+      setHasMore(data.hasMore ?? false);
+      nextCursorRef.current = data.nextCursor ?? null;
       if (data.conversationId) {
         setCurrentConversationId(data.conversationId);
       }
@@ -61,6 +71,29 @@ export function useMessages({
 
     loadMessages();
   }, [projectId, currentConversationId]);
+
+  // Load older messages (prepend)
+  const loadMore = useCallback(async () => {
+    if (!hasMore || loadingMore || !nextCursorRef.current || !currentConversationId) return;
+    setLoadingMore(true);
+    try {
+      const res = await apiFetch(
+        `/api/chat?conversationId=${currentConversationId}&cursor=${encodeURIComponent(nextCursorRef.current)}`,
+      );
+      if (!res.ok) return;
+      const data = await res.json();
+      const older: Message[] = data.messages || [];
+      if (older.length > 0) {
+        setMessages((prev) => [...older, ...prev]);
+      }
+      setHasMore(data.hasMore ?? false);
+      nextCursorRef.current = data.nextCursor ?? null;
+    } catch {
+      // ignore — user can retry
+    } finally {
+      setLoadingMore(false);
+    }
+  }, [hasMore, loadingMore, currentConversationId]);
 
   const handleSend = useCallback(async () => {
     if (!input.trim()) return;
@@ -116,7 +149,6 @@ export function useMessages({
           metadata: JSON.stringify({
             steps: data.steps,
             agentMessages: data.agentMessages,
-            adaptations: data.adaptations,
           }),
           createdAt: new Date().toISOString(),
         };
@@ -141,5 +173,5 @@ export function useMessages({
     }
   }, [input, projectId, currentConversationId]);
 
-  return { messages, currentConversationId, input, setInput, handleSend };
+  return { messages, currentConversationId, input, setInput, handleSend, hasMore, loadingMore, loadMore };
 }

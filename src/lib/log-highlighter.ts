@@ -27,6 +27,19 @@ export function parseLogSections(logContent: string): LogSection[] {
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
 
+    // Detect pipeline abort: mark all running sections as failed
+    if (line.includes("🛑 PIPELINE ABORTED")) {
+      if (currentSection) {
+        if (currentSection.status === "running") currentSection.status = "failed";
+        currentContent.push(line);
+      }
+      // Mark any previously saved running sections as failed
+      for (const s of sections) {
+        if (s.status === "running") s.status = "failed";
+      }
+      continue;
+    }
+
     // Detect agent start: "🚀 [agent:role] Started"
     const startMatch = line.match(/🚀 \[([^\]]+)\] Started/);
     if (startMatch) {

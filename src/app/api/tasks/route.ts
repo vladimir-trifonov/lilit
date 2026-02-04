@@ -1,5 +1,6 @@
 import { prisma } from "@/lib/prisma";
 import { NextResponse } from "next/server";
+import { TASKS_PER_RUN_LIMIT } from "@/lib/constants";
 
 export const dynamic = "force-dynamic";
 
@@ -36,6 +37,7 @@ export async function GET(req: Request) {
     const tasks = await prisma.task.findMany({
       where: { pipelineRunId: run.id },
       orderBy: { sequenceOrder: "asc" },
+      take: TASKS_PER_RUN_LIMIT,
       include: { notes: { orderBy: { createdAt: "asc" } } },
     });
 

@@ -108,9 +108,15 @@ model PipelineRun {
   runningCost    Float    @default(0)
   error          String?
 
+  // Persisted log content (stored on pipeline completion for historical viewing)
+  logContent     String?
+
   // Dynamic orchestration fields
   taskGraph      String?  // JSON: TaskGraph
   decisionCount  Int      @default(0)
+
+  // Worker liveness — updated every WORKER_HEARTBEAT_INTERVAL_MS by the worker process
+  heartbeatAt    DateTime?
 
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
@@ -219,6 +225,7 @@ model Task {
   dependsOn       String[]      // graph IDs this depends on
   attempts        Int           @default(0)
   maxAttempts     Int           @default(3)
+  sessionId       String?       // Claude CLI session ID for resuming conversations
 
   // Output
   output          String?

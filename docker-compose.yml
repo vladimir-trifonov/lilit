@@ -21,9 +21,10 @@ services:
   app:
     build: .
     ports:
-      - "3000:3000"
+      - "51000:51000"
     environment:
       DATABASE_URL: "postgresql://lilit:lilit@postgres:5432/lilit"
+      PORT: "51000"
       GOOGLE_GENERATIVE_AI_API_KEY: "${GOOGLE_GENERATIVE_AI_API_KEY}"
       OLLAMA_BASE_URL: "http://ollama:11434"
     volumes:

@@ -38,24 +38,18 @@ export function buildPMDecisionPrompt(ctx: PMDecisionContext): string {
     );
   }
 
-  // 4. Completed tasks with output summaries
+  // 4. Completed tasks (IDs only — use MCP tools to inspect details)
   if (ctx.completedTasks.length > 0) {
     const formatted = ctx.completedTasks
-      .map(
-        (t) =>
-          `- ${t.id} ($${t.costUsd.toFixed(3)}): ${t.outputSummary.slice(0, 200)}`,
-      )
+      .map((t) => `- ${t.id} ($${t.costUsd.toFixed(3)})`)
       .join("\n");
     sections.push(`## Completed Tasks\n\n${formatted}`);
   }
 
-  // 5. Failed tasks
+  // 5. Failed tasks (IDs only — use MCP tools to inspect details)
   if (ctx.failedTasks.length > 0) {
     const formatted = ctx.failedTasks
-      .map(
-        (t) =>
-          `- ${t.id} (${t.attempts} attempt(s)): ${t.error.slice(0, 200)}`,
-      )
+      .map((t) => `- ${t.id} (${t.attempts} attempt(s))`)
       .join("\n");
     sections.push(`## Failed Tasks\n\n${formatted}`);
   }
@@ -185,5 +179,16 @@ function formatTrigger(trigger: PMDecisionContext["trigger"]): string {
       return "All tasks are either completed, failed, blocked, or cancelled. No tasks are running or ready. Decide whether to add new tasks, retry failed ones, or complete the pipeline.";
     case "budget_warning":
       return `Budget warning: $${trigger.spent.toFixed(2)} spent, $${trigger.remaining.toFixed(2)} remaining. Consider completing soon or reducing scope.`;
+    case "pipeline_resumed": {
+      const parts = ["The pipeline was previously aborted and is now resuming."];
+      if (trigger.interruptedTasks.length > 0) {
+        parts.push(`\nInterrupted tasks (were running at abort time, now ready): ${trigger.interruptedTasks.join(", ")}`);
+      }
+      if (trigger.failedTasks.length > 0) {
+        parts.push(`\nFailed tasks (need your decision — retry, skip, or replace): ${trigger.failedTasks.join(", ")}`);
+      }
+      parts.push("\nReview the task graph state below and decide how to proceed. You can execute ready tasks, retry or skip failed ones, add new tasks, or adjust the plan as needed.");
+      return parts.join("");
+    }
   }
 }

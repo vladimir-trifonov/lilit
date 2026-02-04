@@ -7,5 +7,59 @@
 
 | ID | Time | T | Title | Read |
 |----|------|---|-------|------|
-| #235 | 8:31 PM | 🔵 | Orchestrator Sequential Pipeline Execution Flow | ~471 |
+| #1289 | 11:42 PM | 🔄 | Removed hardcoded Antigravity model pricing entries from cost calculator | ~337 |
+| #1283 | 11:41 PM | 🔵 | Cost calculator implements tiered pricing with free-tier provider strategies | ~493 |
+| #1281 | 11:40 PM | 🔵 | Antigravity models priced at zero cost in cost calculator | ~291 |
+| #1275 | " | 🔵 | Comprehensive constants file with timeouts, limits, and configuration values | ~588 |
+| #1272 | 11:39 PM | 🔵 | Model constants define four AI providers with specific model lists | ~433 |
+| #608 | 8:36 PM | 🔵 | Log Parser for Pipeline Step Extraction | ~401 |
+| #590 | 8:35 PM | 🔵 | Stack Detection System | ~400 |
+| #487 | 8:34 PM | ✅ | PM prompt instruction updated to include conversational response option | ~382 |
+
+### Feb 4, 2026
+
+| ID | Time | T | Title | Read |
+|----|------|---|-------|------|
+| #2316 | 5:06 AM | 🔴 | Clear Session ID When Retrying Failed Tasks | ~400 |
+| #2315 | " | 🟣 | Session ID Reuse Implemented for Pipeline Resume and Agent Conversation Continuity | ~486 |
+| #2314 | " | 🔵 | Graph Resume Logic Handles Interrupted and Blocked Tasks | ~456 |
+| #2307 | 5:04 AM | 🟣 | Session IDs Now Persisted to Database for Task Resume Capability | ~390 |
+| #2288 | 5:02 AM | 🔴 | Removed Unused sessionIds Parameter from launchTasks Signature | ~358 |
+| #2287 | " | 🔴 | Removed Obsolete agentSessionIds Parameter from Execute Action Call | ~326 |
+| #2285 | 5:01 AM | 🔴 | agentSessionIds Still Referenced After Map Deletion | ~358 |
+| #2283 | " | 🔴 | Removed Stale agentSessionIds Parameter from Auto-Execute Path | ~342 |
+| #2278 | " | 🔵 | Second launchTasks Call Site Also Has Stale Parameter | ~374 |
+| #2277 | " | 🔄 | Removed Unused agentSessionIds Map from PM Decision Loop | ~390 |
+| #2275 | " | 🔵 | Agent Session IDs Initialized and Passed Through Decision Loop | ~269 |
+| #2274 | " | 🔵 | Stale agentSessionIds Variable Still Passed to launchTasks | ~372 |
+| #2272 | " | 🔵 | Launch Tasks Function Manages Parallel Task Execution with Session Tracking | ~323 |
+| #2270 | " | 🔴 | Fixed Session ID Conflicts by Assigning Unique ID Per Task | ~448 |
+| #2268 | 5:00 AM | 🔵 | Session IDs Used to Maintain Agent Continuity Across Tasks | ~369 |
+| #2244 | 4:57 AM | 🔵 | Orchestrator Invokes PM Decision Loop with Full Context and Resume Support | ~489 |
+| #2240 | 4:56 AM | 🔵 | PM Decision Loop Signature and Initial State Setup | ~443 |
+| #2239 | " | 🔵 | PM Decision Loop Writes Question and Emits Progress Event | ~376 |
+| #2236 | " | 🔵 | PM Question File Naming Uses RunId Without Timestamp Prefix | ~488 |
+| #2230 | 4:55 AM | 🔵 | Complete PM Question Flow Analysis from Backend to Frontend | ~685 |
+| #2222 | 4:54 AM | 🔵 | PM Decision Loop Orchestrates Dynamic Task Execution with User Gates | ~785 |
+| #2218 | 4:53 AM | 🔵 | File-Based Polling System for Pipeline-User Communication | ~577 |
+| #2214 | " | 🔵 | PM Question File Mechanism Found in Constants Configuration | ~497 |
+| #1725 | 2:06 AM | 🔵 | Constants Define Sequential-Mode-Specific MAX_FIX_CYCLES Limit | ~564 |
+| #1724 | 2:05 AM | 🔵 | Pipeline Adaptation Module Fully Implemented But Completely Unused | ~615 |
+| #1720 | 2:04 AM | 🔵 | Worker Process Supports Pipeline Resume via resumeRunId Parameter | ~586 |
+| #1719 | 2:02 AM | 🔵 | Dead Code Analysis Reveals Unused Sequential Pipeline Infrastructure | ~639 |
+| #1718 | 2:01 AM | 🔵 | Orchestrator Imports Sequential-Mode Functions from prompt-builders | ~596 |
+| #1717 | " | 🔵 | Agent Runner Helper Functions for Legacy Sequential Pipeline Step Validation | ~566 |
+| #1715 | " | 🔵 | Comprehensive Legacy Code Audit Identifies Sequential Pipeline Remnants Across Codebase | ~748 |
+| #1714 | " | 🔵 | Complete Mapping of Legacy Sequential Pipeline Code vs Dynamic Orchestration | ~753 |
+| #1712 | 2:00 AM | 🔵 | Worker Process Supports Pipeline Resumption Via resumeRunId Parameter | ~533 |
+| #1707 | 1:59 AM | 🔵 | Pipeline Adaptation Module for Legacy Sequential Pipeline Execution | ~530 |
+| #1705 | 1:57 AM | 🔵 | Dual Task ID System: PM String IDs vs Database UUIDs with graphId Mapping | ~225 |
+| #1703 | 1:56 AM | 🔵 | PM Decision Prompt Structure for Dynamic Orchestration Loop | ~623 |
+| #1699 | 1:54 AM | 🔴 | DependsOn Parser Now Strips "t" Prefix from Task ID References | ~431 |
+| #1696 | 1:53 AM | 🔴 | Enhanced PM Plan Parser to Accept Task IDs Prefixed with "t" | ~422 |
+| #1694 | " | 🔴 | Fixed getReadyTasks to Include Tasks Already in Ready Status | ~506 |
+| #1693 | " | 🔵 | Task Graph Engine Pure Functions with Auto-Promotion Logic | ~609 |
+| #1692 | 1:52 AM | 🔵 | PM Plan Parser Extracts Task Dependencies from Markdown-Formatted Plans | ~541 |
+| #1689 | 1:51 AM | 🔵 | PM Decision Loop Implementation - Root Cause of Task Execution Failure | ~590 |
+| #1688 | " | 🔵 | LILIT Orchestrator Architecture and Dynamic Task Graph Implementation | ~541 |
 </claude-mem-context>

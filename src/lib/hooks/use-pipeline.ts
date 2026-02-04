@@ -5,7 +5,7 @@ import { usePolling } from "./use-polling";
 import { parseLogSteps } from "@/lib/log-parser";
 import { DISMISSED_RUN_KEY_PREFIX } from "@/lib/constants";
 import { apiFetch } from "@/lib/utils";
-import type { PipelineStep, DbTask } from "@/types/pipeline";
+import type { PipelineStep, DbTask, PastRun } from "@/types/pipeline";
 
 interface ResumableRun {
   runId: string;
@@ -26,19 +26,24 @@ export interface UsePipelineResult {
   loading: boolean;
   logContent: string;
   currentAgent: string | null;
+  activeRunId: string | null;
   pendingPlan: { runId: string; plan: unknown } | null;
   pendingQuestion: PMQuestionData | null;
   resumableRun: ResumableRun | null;
   pipelineSteps: PipelineStep[];
   tasks: DbTask[];
+  pastRuns: PastRun[];
+  hasMorePastRuns: boolean;
 
   // Control
   abort: () => Promise<void>;
-  resume: () => Promise<void>;
   restart: () => Promise<void>;
   dismissResumable: () => void;
   clearPendingPlan: () => void;
   answerQuestion: (answer: string) => Promise<void>;
+  loadMorePastRuns: () => Promise<void>;
+  expandPastRun: (runId: string) => Promise<void>;
+  collapsePastRun: (runId: string) => void;
 
   // Used by message submit to start a new pipeline run
   startRun: () => void;
@@ -60,6 +65,10 @@ export function usePipeline(projectId: string): UsePipelineResult {
   const [pendingQuestion, setPendingQuestion] = useState<PMQuestionData | null>(null);
   const [resumableRun, setResumableRun] = useState<ResumableRun | null>(null);
   const [tasks, setTasks] = useState<DbTask[]>([]);
+  const [activeRunId, setActiveRunId] = useState<string | null>(null);
+  const [pastRuns, setPastRuns] = useState<PastRun[]>([]);
+  const [hasMorePastRuns, setHasMorePastRuns] = useState(false);
+  const pastRunsCursorRef = useRef<string | null>(null);
   const logOffsetRef = useRef(0);
   const prevLoadingRef = useRef(false);
   const runStartedAtRef = useRef(0);
@@ -94,17 +103,18 @@ export function usePipeline(projectId: string): UsePipelineResult {
         const data = await res.json();
         if (cancelled) return;
 
-        // Hydrate DB tasks whenever the API returns them
+        // Hydrate DB tasks and past runs whenever the API returns them
         if (data.tasks) {
           setTasks(data.tasks);
         }
+        if (data.pastRuns) {
+          setPastRuns(data.pastRuns);
+          setHasMorePastRuns(data.hasMorePastRuns ?? false);
+          pastRunsCursorRef.current = data.pastRunsCursor ?? null;
+        }
 
-        if (data.status === "running" || data.status === "awaiting_plan") {
-          setLoading(true);
-          logOffsetRef.current = 0;
-          activeRunIdRef.current = data.runId ?? null;
-
-          // Hydrate existing log content so reload shows accumulated output
+        // Hydrate log content from disk for any status that had a run
+        if (data.status && data.status !== "none") {
           try {
             const logRes = await apiFetch(`/api/logs?projectId=${projectId}&offset=0`);
             const logData = await logRes.json();
@@ -115,12 +125,19 @@ export function usePipeline(projectId: string): UsePipelineResult {
           } catch {
             // fall through — polling will catch up
           }
+        }
+
+        if (data.status === "running" || data.status === "awaiting_plan") {
+          setLoading(true);
+          logOffsetRef.current = logOffsetRef.current || 0;
+          activeRunIdRef.current = data.runId ?? null;
+          setActiveRunId(data.runId ?? null);
 
           // Hydrate pending plan from DB when status is awaiting_plan
           if (data.status === "awaiting_plan" && data.plan) {
             setPendingPlan({ runId: data.runId, plan: data.plan });
           }
-        } else if (data.status === "aborted" && data.totalSteps > 0) {
+        } else if (data.status === "aborted") {
           if (!isRunDismissed(data.runId)) {
             setResumableRun({
               runId: data.runId,
@@ -144,6 +161,11 @@ export function usePipeline(projectId: string): UsePipelineResult {
   // ---- Log polling (1.5s while loading) ----
   usePolling(
     async () => {
+      // Grace period: skip log fetches for 5s after startRun() to let the
+      // worker process start and call clearLog(). Without this, the polling
+      // re-fetches the previous run's log file before it is cleared.
+      if (Date.now() - runStartedAtRef.current < 5000) return;
+
       try {
         const res = await apiFetch(
           `/api/logs?projectId=${projectId}&offset=${logOffsetRef.current}`,
@@ -192,15 +214,17 @@ export function usePipeline(projectId: string): UsePipelineResult {
         }
         if (data.runId) {
           activeRunIdRef.current = data.runId;
+          setActiveRunId(data.runId);
         }
         if (data.status && data.status !== "running" && data.status !== "awaiting_plan") {
           setLoading(false);
           setPendingPlan(null);
           setPendingQuestion(null);
           activeRunIdRef.current = null;
+          setActiveRunId(null);
 
-          // Offer resume if the pipeline was aborted mid-execution
-          if (data.status === "aborted" && data.totalSteps > 0) {
+          // Offer restart if the pipeline was aborted
+          if (data.status === "aborted") {
             if (!isRunDismissed(data.runId)) {
               setResumableRun({
                 runId: data.runId,
@@ -247,6 +271,7 @@ export function usePipeline(projectId: string): UsePipelineResult {
         const res = await apiFetch(
           `/api/pipeline/question?projectId=${projectId}&runId=${runId}`,
         );
+        if (!res.ok) return;
         const data = await res.json();
         if (data.status === "pending" && data.question) {
           setPendingQuestion({
@@ -334,9 +359,14 @@ export function usePipeline(projectId: string): UsePipelineResult {
     }
   }, [projectId]);
 
-  const resume = useCallback(async () => {
+  const restart = useCallback(async () => {
     if (!resumableRun) return;
-    startRun();
+
+    // Resume: keep existing log content, don't reset offset
+    setLoading(true);
+    setResumableRun(null);
+    setPendingQuestion(null);
+    runStartedAtRef.current = Date.now();
 
     try {
       await apiFetch("/api/pipeline", {
@@ -351,26 +381,7 @@ export function usePipeline(projectId: string): UsePipelineResult {
     } catch {
       setLoading(false);
     }
-  }, [resumableRun, projectId, startRun]);
-
-  const restart = useCallback(async () => {
-    if (!resumableRun) return;
-    startRun();
-
-    try {
-      await apiFetch("/api/pipeline", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          projectId,
-          action: "restart",
-          runId: resumableRun.runId,
-        }),
-      });
-    } catch {
-      setLoading(false);
-    }
-  }, [resumableRun, projectId, startRun]);
+  }, [resumableRun, projectId]);
 
   const dismissResumable = useCallback(() => {
     if (resumableRun) {
@@ -384,6 +395,54 @@ export function usePipeline(projectId: string): UsePipelineResult {
   }, [resumableRun]);
 
   const clearPendingPlan = useCallback(() => setPendingPlan(null), []);
+
+  const loadMorePastRuns = useCallback(async () => {
+    if (!hasMorePastRuns || !pastRunsCursorRef.current) return;
+    try {
+      const res = await apiFetch(
+        `/api/pipeline?projectId=${projectId}&pastRunsCursor=${encodeURIComponent(pastRunsCursorRef.current)}`,
+      );
+      if (!res.ok) return;
+      const data = await res.json();
+      if (data.pastRuns) {
+        setPastRuns((prev) => [...prev, ...data.pastRuns]);
+        setHasMorePastRuns(data.hasMorePastRuns ?? false);
+        pastRunsCursorRef.current = data.pastRunsCursor ?? null;
+      }
+    } catch {
+      // ignore
+    }
+  }, [projectId, hasMorePastRuns]);
+
+  const expandPastRun = useCallback(async (runId: string) => {
+    // Mark as loading
+    setPastRuns((prev) =>
+      prev.map((r) => (r.runId === runId ? { ...r, loading: true, expanded: true } : r)),
+    );
+    try {
+      const res = await apiFetch(`/api/pipeline/${encodeURIComponent(runId)}`);
+      if (!res.ok) throw new Error("fetch failed");
+      const data = await res.json();
+      setPastRuns((prev) =>
+        prev.map((r) =>
+          r.runId === runId
+            ? { ...r, logContent: data.logContent, tasks: data.tasks, loading: false, expanded: true }
+            : r,
+        ),
+      );
+    } catch {
+      // Collapse back on error so user can retry
+      setPastRuns((prev) =>
+        prev.map((r) => (r.runId === runId ? { ...r, loading: false, expanded: false } : r)),
+      );
+    }
+  }, []);
+
+  const collapsePastRun = useCallback((runId: string) => {
+    setPastRuns((prev) =>
+      prev.map((r) => (r.runId === runId ? { ...r, expanded: false } : r)),
+    );
+  }, []);
 
   const answerQuestion = useCallback(async (answer: string) => {
     if (!pendingQuestion) return;
@@ -407,17 +466,22 @@ export function usePipeline(projectId: string): UsePipelineResult {
     loading,
     logContent,
     currentAgent,
+    activeRunId,
     pendingPlan,
     pendingQuestion,
     resumableRun,
     pipelineSteps,
     tasks,
+    pastRuns,
+    hasMorePastRuns,
     abort,
-    resume,
     restart,
     dismissResumable,
     clearPendingPlan,
     answerQuestion,
+    loadMorePastRuns,
+    expandPastRun,
+    collapsePastRun,
     startRun,
     appendLog,
     refetchStatus,

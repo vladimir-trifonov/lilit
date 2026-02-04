@@ -10,13 +10,12 @@
  */
 
 import { prisma } from "./prisma";
-import { appendLog as rawAppendLog, isAborted } from "./claude-code";
+import { appendLog as rawAppendLog, isAborted, getLogFile } from "./claude-code";
 import { getAgentRegistry } from "./agent-loader";
-import { logEvent, getEventHistory, formatEventsForPrompt } from "./event-log";
-import { queryMemories, formatMemoriesForPrompt, getMemoryTypesForAgent } from "./memory";
+import { logEvent } from "./event-log";
 import { ingestDecisionFromEvent, ingestPersonalityFromAgentRun } from "./memory-ingestion";
 import { updateRelationships } from "./personality";
-import { getMessageInstructions, extractMessages, storeMessages, getInboxMessages, formatInboxForPrompt } from "./agent-messages";
+import { getMessageInstructions, extractMessages, storeMessages } from "./agent-messages";
 import { evaluateDebateTriggers, runDebateRound, storeDebateRound, ingestDebateMemory, updateDebateRelationships, type DebateRoundResult } from "./debate";
 import { buildPMDecisionPrompt } from "./pm-decision-prompt";
 import { buildStepPrompt, type StepResult, type PMPlan } from "./prompt-builders";
@@ -50,16 +49,30 @@ import type {
 import {
   MAX_PARALLEL_TASKS,
   MAX_PM_DECISIONS_PER_RUN,
-  EVENT_HISTORY_LIMIT,
-  RAG_MEMORY_LIMIT,
   TASK_OUTPUT_SUMMARY_LENGTH,
+  TASK_EXECUTION_TIMEOUT_MS,
+  TASK_HEALTH_CHECK_INTERVAL_MS,
+  TASK_STALE_THRESHOLD_MS,
 } from "@/lib/constants";
+import fs from "fs";
 import { AGENT } from "@/lib/models";
 import crypto from "crypto";
 
 function appendLog(projectId: string, text: string) {
   rawAppendLog(projectId, text);
 }
+
+const PM_DECISION_SYSTEM_PROMPT = `You are the Project Manager (PM). You make routing decisions during pipeline execution.
+
+IMPORTANT — before executing tasks:
+- Use get_pipeline_runs to check if previous runs already completed relevant work.
+- Use get_step_output or get_task with graph IDs (t1, t2...) to inspect completed task outputs.
+- If work is already done from a previous run, skip the task or mark it complete instead of re-executing.
+- If a task was partially done or the codebase already has the changes, acknowledge it and adjust the plan.
+
+You have tools available to inspect task details, outputs, and project history — use them to make informed decisions instead of guessing. Only call a tool when you actually need the data.
+
+Always output your decision in [PM_DECISION]...[/PM_DECISION] blocks with valid JSON.`;
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -94,6 +107,8 @@ export async function runPMDecisionLoop(opts: {
   userMessage: string;
   plan: PMPlan;
   onProgress: (event: PipelineProgressEvent) => void;
+  /** Override the initial trigger (e.g. pipeline_resumed). Falls back to "initial". */
+  initialTrigger?: DecisionTrigger;
 }): Promise<DecisionLoopResult> {
   const {
     projectId,
@@ -108,7 +123,6 @@ export async function runPMDecisionLoop(opts: {
   let runningCost = 0;
   const steps: StepResult[] = [];
   const allDebates: DebateRoundResult[] = [];
-  const agentSessionIds = new Map<string, string>();
   const agentMessagesToPM: PMDecisionContext["agentMessagesToPM"] = [];
   const recentAgentMessages: PMDecisionContext["recentAgentMessages"] = [];
   const accumulatedUserMessages: string[] = [];
@@ -120,11 +134,10 @@ export async function runPMDecisionLoop(opts: {
     Promise<{ taskId: string; result: { success: boolean; output: string; cost?: number } }>
   >();
 
-  // Seed initial trigger
+  // Seed initial trigger — use override if provided (e.g. pipeline_resumed)
   const readyTasks = getReadyTasks(graph);
-  let pendingTrigger: DecisionTrigger | null = readyTasks.length > 0
-    ? { type: "initial", readyTasks }
-    : null;
+  let pendingTrigger: DecisionTrigger | null = opts.initialTrigger
+    ?? (readyTasks.length > 0 ? { type: "initial", readyTasks } : null);
 
   appendLog(projectId, `\n🧠 PM DECISION LOOP STARTED\n`);
   appendLog(projectId, `📊 ${Object.keys(graph.tasks).length} task(s) in graph\n`);
@@ -149,8 +162,9 @@ export async function runPMDecisionLoop(opts: {
     }
 
     // 3. If no trigger and tasks are running, wait for one to complete
+    //    Poll every 30s to check liveness (abort, log freshness, user messages).
     if (!pendingTrigger && runningTaskPromises.size > 0) {
-      const completed = await Promise.race(runningTaskPromises.values());
+      const completed = await awaitNextCompletion(runningTaskPromises, projectId, runId);
       runningTaskPromises.delete(completed.taskId);
       const taskNode = graph.tasks[completed.taskId];
 
@@ -211,6 +225,12 @@ export async function runPMDecisionLoop(opts: {
 
       // Update task in DB
       await updateTaskInDb(completed.taskId, graph.tasks[completed.taskId], pipelineRunDbId);
+
+      // Check abort after task completion — prevents PM call on aborted task
+      if (isAborted(projectId)) {
+        appendLog(projectId, `\n🛑 Pipeline aborted after task ${completed.taskId} completed\n`);
+        break;
+      }
     }
 
     // 4. If no trigger and nothing running
@@ -234,6 +254,12 @@ export async function runPMDecisionLoop(opts: {
       }
     }
 
+    // Check abort before calling PM — prevents unnecessary PM decision after abort
+    if (isAborted(projectId)) {
+      appendLog(projectId, `\n🛑 Pipeline aborted before PM decision\n`);
+      break;
+    }
+
     // 5. Build PM decision context
     const ctx: PMDecisionContext = {
       trigger: pendingTrigger!,
@@ -243,14 +269,12 @@ export async function runPMDecisionLoop(opts: {
         .filter((t) => t.status === "done")
         .map((t) => ({
           id: t.id,
-          outputSummary: (t.output ?? "").slice(0, TASK_OUTPUT_SUMMARY_LENGTH),
           costUsd: t.costUsd ?? 0,
         })),
       failedTasks: Object.values(graph.tasks)
         .filter((t) => t.status === "failed")
         .map((t) => ({
           id: t.id,
-          error: (t.error ?? t.output ?? "").slice(0, TASK_OUTPUT_SUMMARY_LENGTH),
           attempts: t.attempts,
         })),
       readyTasks: getReadyTasks(graph),
@@ -277,9 +301,11 @@ export async function runPMDecisionLoop(opts: {
 
     const pmResult = await pmAdapter.execute({
       prompt: pmPrompt,
-      systemPrompt: "You are the Project Manager (PM). You make routing decisions during pipeline execution. Always output your decision in [PM_DECISION]...[/PM_DECISION] blocks with valid JSON.",
+      systemPrompt: PM_DECISION_SYSTEM_PROMPT,
       model: pmModel.model,
       agentLabel: "pm:decision",
+      projectId,
+      enableTools: true,
     });
 
     const pmCost = pmResult.tokensUsed
@@ -303,7 +329,6 @@ export async function runPMDecisionLoop(opts: {
           graph,
           opts,
           runningTaskPromises,
-          agentSessionIds,
           pipelineRunDbId,
         );
         for (const id of ready.slice(0, MAX_PARALLEL_TASKS)) {
@@ -348,7 +373,7 @@ export async function runPMDecisionLoop(opts: {
           const capped = toExecute.slice(0, MAX_PARALLEL_TASKS - runningTaskPromises.size);
           if (capped.length > 0) {
             appendLog(projectId, `▶️ Executing: ${capped.join(", ")}\n`);
-            await launchTasks(capped, graph, opts, runningTaskPromises, agentSessionIds, pipelineRunDbId);
+            await launchTasks(capped, graph, opts, runningTaskPromises, pipelineRunDbId);
             for (const id of capped) {
               graph = updateTaskStatus(graph, id, { status: "running" });
             }
@@ -430,6 +455,15 @@ export async function runPMDecisionLoop(opts: {
 
         case "retry": {
           graph = retryTask(graph, action.taskId, action.changes);
+          // Clear session ID so retried task gets a fresh conversation
+          try {
+            await prisma.task.updateMany({
+              where: { pipelineRunId: pipelineRunDbId, graphId: action.taskId },
+              data: { sessionId: null },
+            });
+          } catch {
+            // Non-fatal
+          }
           appendLog(projectId, `🔄 Retrying ${action.taskId}${action.changes?.description ? " (with updated instructions)" : ""}\n`);
           break;
         }
@@ -546,14 +580,13 @@ export async function runPMDecisionLoop(opts: {
       break;
     }
 
-    // 11. Checkpoint to DB
+    // 11. Lightweight checkpoint — individual Task rows are already up-to-date.
+    //     Only persist counters; full graph snapshot written at loop end.
     await prisma.pipelineRun.update({
       where: { runId },
       data: {
-        taskGraph: JSON.stringify(graph),
         decisionCount: decisionCount + 1,
         runningCost,
-        completedSteps: JSON.stringify(steps),
         updatedAt: new Date(),
       },
     });
@@ -587,12 +620,131 @@ export async function runPMDecisionLoop(opts: {
     }
   }
 
+  // Final checkpoint — persist full graph + steps once at loop end
+  await prisma.pipelineRun.update({
+    where: { runId },
+    data: {
+      taskGraph: JSON.stringify(graph),
+      completedSteps: JSON.stringify(steps),
+      decisionCount,
+      runningCost,
+      updatedAt: new Date(),
+    },
+  });
+
   appendLog(projectId, `\n🧠 PM DECISION LOOP ENDED (${decisionCount} decisions, $${runningCost.toFixed(3)})\n`);
 
   return { steps, graph, cost: runningCost, debates: allDebates };
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────
+
+type TaskResult = { taskId: string; result: { success: boolean; output: string; cost?: number } };
+
+/** Wrap a task promise with a timeout so the loop never hangs on a dead agent. */
+function withTimeout(
+  promise: Promise<TaskResult>,
+  timeoutMs: number,
+  taskId: string,
+): Promise<TaskResult> {
+  return Promise.race([
+    promise,
+    new Promise<TaskResult>((_, reject) =>
+      setTimeout(
+        () => reject(new Error(`Task ${taskId} timed out after ${Math.round(timeoutMs / 1000)}s`)),
+        timeoutMs,
+      ),
+    ),
+  ]).catch((err) => ({
+    taskId,
+    result: {
+      success: false,
+      output: err instanceof Error ? err.message : String(err),
+    },
+  }));
+}
+
+/**
+ * Poll running task promises with periodic health checks.
+ *
+ * Instead of blocking for the full TASK_EXECUTION_TIMEOUT_MS (35 min),
+ * this wakes every TASK_HEALTH_CHECK_INTERVAL_MS (30s) to check:
+ *   - abort flag
+ *   - log file freshness (stale after TASK_STALE_THRESHOLD_MS = 5 min)
+ *   - incoming user messages
+ *
+ * Returns as soon as any task resolves/rejects, or force-fails a task
+ * if the log goes stale or the pipeline is aborted.
+ */
+async function awaitNextCompletion(
+  runningPromises: Map<string, Promise<TaskResult>>,
+  projectId: string,
+  runId: string,
+): Promise<TaskResult> {
+  let lastLogActivity = Date.now();
+
+  for (;;) {
+    const timer = new Promise<"health_check">((resolve) =>
+      setTimeout(() => resolve("health_check"), TASK_HEALTH_CHECK_INTERVAL_MS),
+    );
+
+    const winner = await Promise.race([
+      ...Array.from(runningPromises.values()),
+      timer,
+    ]);
+
+    // A task completed or failed — return immediately
+    if (winner !== "health_check") {
+      return winner as TaskResult;
+    }
+
+    // ── Health checks (every 30s) ──
+
+    // 1. Abort flag
+    if (isAborted(projectId)) {
+      const firstId = runningPromises.keys().next().value as string;
+      return {
+        taskId: firstId,
+        result: { success: false, output: "Pipeline aborted by user" },
+      };
+    }
+
+    // 2. Log file freshness — detect stuck/dead agent processes
+    try {
+      const logPath = getLogFile(projectId);
+      const stat = fs.statSync(logPath);
+      if (stat.mtimeMs > lastLogActivity) {
+        lastLogActivity = stat.mtimeMs;
+      }
+    } catch {
+      // Log file may not exist yet — treat as fresh
+      lastLogActivity = Date.now();
+    }
+
+    const staleDurationMs = Date.now() - lastLogActivity;
+    if (staleDurationMs > TASK_STALE_THRESHOLD_MS) {
+      const staleSec = Math.round(staleDurationMs / 1000);
+      appendLog(
+        projectId,
+        `⚠️ No log activity for ${staleSec}s — marking task as stale\n`,
+      );
+      const firstId = runningPromises.keys().next().value as string;
+      return {
+        taskId: firstId,
+        result: {
+          success: false,
+          output: `Task appears stale — no log activity for ${staleSec}s`,
+        },
+      };
+    }
+
+    // 3. User messages — note them so main loop can pick up after return
+    const msgs = checkForUserMessages(projectId, runId);
+    if (msgs.length > 0) {
+      appendLog(projectId, `📨 ${msgs.length} user message(s) received during task execution\n`);
+    }
+  }
+}
 
 function parsePMDecision(raw: string): PMDecision | null {
   const blockMatch = raw.match(
@@ -650,29 +802,44 @@ async function launchTasks(
     plan: PMPlan;
   },
   runningPromises: Map<string, Promise<{ taskId: string; result: { success: boolean; output: string; cost?: number } }>>,
-  sessionIds: Map<string, string>,
   pipelineRunDbId: string,
 ) {
   for (const taskId of taskIds) {
     const task = graph.tasks[taskId];
     if (!task) continue;
 
-    const sessionKey = `${task.agent}${task.role ? `:${task.role}` : ""}`;
-    if (!sessionIds.has(sessionKey)) {
-      sessionIds.set(sessionKey, crypto.randomUUID());
+    // Reuse existing session ID on resume (lets Claude pick up conversation history),
+    // otherwise generate a fresh one. Each task gets its own ID to avoid
+    // "session already in use" conflicts between concurrent tasks.
+    let taskSessionId: string | undefined;
+    try {
+      const dbTask = await prisma.task.findFirst({
+        where: { pipelineRunId: pipelineRunDbId, graphId: taskId },
+        select: { sessionId: true },
+      });
+      taskSessionId = dbTask?.sessionId ?? undefined;
+    } catch {
+      // Non-fatal — will generate new
+    }
+    if (!taskSessionId) {
+      taskSessionId = crypto.randomUUID();
     }
 
-    // Mark task in_progress in DB
+    // Mark task in_progress in DB and persist session ID for resume capability
     try {
       await prisma.task.updateMany({
         where: { pipelineRunId: pipelineRunDbId, graphId: taskId },
-        data: { status: "in_progress", startedAt: new Date(), attempts: { increment: 1 } },
+        data: { status: "in_progress", startedAt: new Date(), attempts: { increment: 1 }, sessionId: taskSessionId },
       });
     } catch {
       // Non-fatal
     }
 
-    const promise = executeTaskAsync(taskId, task, graph, ctx, sessionIds.get(sessionKey)!, pipelineRunDbId);
+    const promise = withTimeout(
+      executeTaskAsync(taskId, task, graph, ctx, taskSessionId, pipelineRunDbId),
+      TASK_EXECUTION_TIMEOUT_MS,
+      taskId,
+    );
     runningPromises.set(taskId, promise);
   }
 }
@@ -697,47 +864,13 @@ async function executeTaskAsync(
 
   appendLog(projectId, `\n▶️ [${taskId}] ${task.agent}${task.role ? `:${task.role}` : ""}: ${task.title}\n`);
 
-  // Build events context
-  const currentEvents = await getEventHistory({ projectId, limit: EVENT_HISTORY_LIMIT });
-  const eventsContext = formatEventsForPrompt(currentEvents);
-
-  // RAG memory
-  let memoryContext = "";
-  if (settings.personalityEnabled !== false) {
-    try {
-      const memories = await queryMemories({
-        projectId,
-        query: task.description ?? userMessage,
-        agent: task.agent,
-        types: getMemoryTypesForAgent(),
-        limit: RAG_MEMORY_LIMIT,
-      });
-      if (memories.length > 0) {
-        memoryContext = formatMemoriesForPrompt(memories);
-      }
-    } catch {
-      // Non-fatal
-    }
-  }
-
-  // Inter-agent messaging inbox
-  let inboxContext = "";
-  let messageInstructions = "";
-  try {
-    const inbox = await getInboxMessages({
-      pipelineRunId: pipelineRunDbId,
-      toAgent: task.agent,
-    });
-    if (inbox.length > 0) {
-      inboxContext = formatInboxForPrompt(inbox, settings.voiceEnabled === true);
-    }
-    const otherAgents = [...new Set(
-      Object.values(ctx.plan.tasks).map((t) => typeof t === "object" && "agent" in t ? (t as { agent: string }).agent : ""),
-    )].filter(Boolean);
-    messageInstructions = getMessageInstructions(task.agent, otherAgents);
-  } catch {
-    // Non-fatal
-  }
+  // Agents pull context on demand via tools (search_project_history,
+  // get_step_output, get_messages, etc.). Only build lightweight metadata
+  // that the agent can't fetch itself (message routing instructions).
+  const otherAgents = [...new Set(
+    Object.values(ctx.plan.tasks).map((t) => typeof t === "object" && "agent" in t ? (t as { agent: string }).agent : ""),
+  )].filter(Boolean);
+  const messageInstructions = getMessageInstructions(task.agent, otherAgents);
 
   // Collect output from dependency tasks for context
   const lastOutput = task.dependsOn
@@ -765,12 +898,10 @@ async function executeTaskAsync(
     task: pmTask,
     userMessage,
     projectPath: project.path,
-    eventsContext,
     lastOutput,
     plan,
-    memoryContext,
-    inboxContext,
     messageInstructions,
+    dependencyTaskIds: task.dependsOn,
   });
 
   const result = await runAgent({
@@ -784,7 +915,6 @@ async function executeTaskAsync(
       ? { provider: task.provider, model: task.model, skills: task.skills }
       : undefined,
     pipelineRunId: pipelineRunDbId,
-    memoryContext,
     sessionId,
   });
 

@@ -219,6 +219,7 @@ Key relationships:
 - **No shell exec with user-derived values**: Use `process.kill(pid)` instead of `execSync("kill ...")`. Validate PIDs as integers. Never interpolate user input into shell commands.
 - **Raw SQL safety**: When using `$queryRawUnsafe`, always use positional parameters (`$1`, `$2`). Validate inputs before constructing query strings -- e.g. check `Number.isFinite()` on all embedding values before building vector strings.
 - **Child process output**: Truncate stderr output from worker processes before logging to prevent sensitive data (API keys, tokens) from appearing in server logs. Use `WORKER_STDERR_MAX_LENGTH` from constants.
+- **No legacy code**: When a feature or execution path is superseded, remove it entirely. Do not keep dead code behind feature flags, commented out, or gated by settings that are always true/false. If the old path has no call sites or is unreachable, delete it. Unused imports, helper functions, types, constants, and UI blocks must be removed in the same change.
 
 ### Shared Utilities (use these, don't re-implement)
 

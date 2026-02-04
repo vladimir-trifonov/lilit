@@ -97,7 +97,8 @@ export type DecisionTrigger =
       content: string;
     }
   | { type: "all_idle" }
-  | { type: "budget_warning"; spent: number; remaining: number };
+  | { type: "budget_warning"; spent: number; remaining: number }
+  | { type: "pipeline_resumed"; interruptedTasks: string[]; failedTasks: string[] };
 
 // ── PM decision context ────────────────────────────────────────────────────
 
@@ -105,8 +106,8 @@ export interface PMDecisionContext {
   trigger: DecisionTrigger;
   graph: TaskGraph;
   runningTasks: string[];
-  completedTasks: { id: string; outputSummary: string; costUsd: number }[];
-  failedTasks: { id: string; error: string; attempts: number }[];
+  completedTasks: { id: string; costUsd: number }[];
+  failedTasks: { id: string; attempts: number }[];
   readyTasks: string[];
   budget: { spent: number; limit: number; remaining: number };
   availableAgents: {

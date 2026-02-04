@@ -18,6 +18,6 @@ COPY . .
 # Generate Prisma client
 RUN npx prisma generate
 
-EXPOSE 3000
+EXPOSE 51000
 
 CMD ["sh", "-c", "npx prisma db push --skip-generate && npm run dev"]

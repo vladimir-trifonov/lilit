@@ -23,6 +23,7 @@
 
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { STANDUP_TRENDS_LIMIT } from "@/lib/constants";
 
 export const dynamic = "force-dynamic";
 
@@ -250,6 +251,7 @@ export async function GET(request: Request) {
   const messages = await prisma.standupMessage.findMany({
     where,
     orderBy: { createdAt: "desc" },
+    take: STANDUP_TRENDS_LIMIT,
     select: {
       id: true,
       insightType: true,

@@ -65,7 +65,7 @@ export function SplashScreen({ onComplete }: { onComplete: () => void }) {
 
   return (
     <div
-      className={`fixed inset-0 z-50 flex flex-col items-center justify-center bg-background overflow-hidden transition-opacity duration-800 ease-out ${
+      className={`fixed inset-0 z-[100] flex flex-col items-center justify-center bg-background overflow-hidden transition-opacity duration-800 ease-out ${
         exiting ? "opacity-0 pointer-events-none" : "opacity-100"
       }`}
     >
@@ -143,26 +143,7 @@ export function SplashScreen({ onComplete }: { onComplete: () => void }) {
             your AI development crew
           </p>
 
-          {/* Agent avatars */}
-          <div
-            className="mt-10 flex items-center gap-6 opacity-0 animate-fade-in"
-            style={{ animationDelay: "800ms" }}
-          >
-            {agents.map((agent, i) => (
-              <div
-                key={agent.name}
-                className="flex flex-col items-center gap-1 opacity-0 animate-fade-in-up"
-                style={{ animationDelay: `${900 + i * 150}ms` }}
-              >
-                <div className="h-8 w-8 rounded-full border border-white/10 bg-white/5 flex items-center justify-center">
-                  <span className="text-xs font-semibold text-white/40">
-                    {agent.name[0]}
-                  </span>
-                </div>
-                <span className="text-[10px] font-mono text-white/20">{agent.role}</span>
-              </div>
-            ))}
-          </div>
+
 
           {/* Play button with pulse ring */}
           <div

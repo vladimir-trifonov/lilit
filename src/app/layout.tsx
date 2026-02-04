@@ -30,9 +30,18 @@ export default function RootLayout({
         )}
       </head>
       <body
-        className={`${geistSans.variable} ${geistMono.variable} antialiased min-h-screen bg-background text-foreground`}
+        className={`${geistSans.variable} ${geistMono.variable} antialiased min-h-screen bg-background text-foreground overflow-hidden selection:bg-brand selection:text-white`}
       >
-        <div className="fixed top-[30%] left-1/2 -translate-x-1/2 -translate-y-1/2 w-[600px] h-[400px] bg-brand/5 blur-[120px] pointer-events-none -z-10" />
+        {/* Global Background Ambience */}
+        <div className="fixed inset-0 pointer-events-none -z-50 overflow-hidden">
+          {/* Main gradient mesh */}
+          <div className="absolute top-[-20%] left-[-10%] w-[80%] h-[80%] bg-brand-glow blur-[120px] rounded-full opacity-20 animate-pulse-slow" />
+          <div className="absolute bottom-[-20%] right-[-10%] w-[60%] h-[60%] bg-accent-soft blur-[100px] rounded-full opacity-15" />
+          
+          {/* Noise texture overlay */}
+          <div className="absolute inset-0 opacity-[0.03] mix-blend-overlay bg-[url('/noise.svg')] bg-repeat" />
+        </div>
+        
         {children}
       </body>
     </html>

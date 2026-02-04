@@ -46,6 +46,8 @@ export interface ExecutionContext {
   sessionId?: string;
   /** Whether to expose project data tools to the agent. */
   enableTools?: boolean;
+  /** Optional callback invoked for each stream-json event (Claude Code CLI only). */
+  onStreamEvent?: (event: StreamEvent) => void;
 }
 
 export interface ExecutionResult {
@@ -56,6 +58,54 @@ export interface ExecutionResult {
   durationMs: number;
   tokensUsed?: { inputTokens: number; outputTokens: number };
 }
+
+// ---- Stream Events (Claude Code CLI stream-json) ----
+
+export interface StreamEventSystem {
+  type: "system";
+  subtype: string;
+  [key: string]: unknown;
+}
+
+export interface StreamEventAssistant {
+  type: "assistant";
+  message: {
+    content: Array<
+      | { type: "text"; text: string }
+      | { type: "tool_use"; id: string; name: string; input: Record<string, unknown> }
+    >;
+    [key: string]: unknown;
+  };
+  [key: string]: unknown;
+}
+
+export interface StreamEventTool {
+  type: "tool";
+  [key: string]: unknown;
+}
+
+export interface StreamEventResult {
+  type: "result";
+  result?: string;
+  duration_ms?: number;
+  duration_api_ms?: number;
+  is_error?: boolean;
+  total_cost_usd?: number;
+  usage?: {
+    input_tokens?: number;
+    output_tokens?: number;
+    cache_creation_input_tokens?: number;
+    cache_read_input_tokens?: number;
+    [key: string]: unknown;
+  };
+  [key: string]: unknown;
+}
+
+export type StreamEvent =
+  | StreamEventSystem
+  | StreamEventAssistant
+  | StreamEventTool
+  | StreamEventResult;
 
 // ---- Provider Adapter Interface ----
 

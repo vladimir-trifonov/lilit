@@ -11,6 +11,7 @@ import {
   TOOL_UPDATE_TASK_STATUS,
   TOOL_GET_MESSAGES,
   TOOL_GET_STEP_OUTPUT,
+  TOOL_GET_INBOX,
   TOOL_GET_PIPELINE_RUNS,
   TOOL_GET_PROJECT_INFO,
   TOOL_UPDATE_PROJECT_STACK,
@@ -22,6 +23,7 @@ import {
   updateTaskStatus,
   getMessages,
   getStepOutput,
+  getInbox,
   getPipelineRuns,
   getProjectInfo,
   updateProjectStack,
@@ -64,6 +66,10 @@ export const TOOL_REGISTRY: Record<string, ToolEntry> = {
   get_step_output: {
     definition: TOOL_GET_STEP_OUTPUT,
     execute: wrap(getStepOutput),
+  },
+  get_inbox: {
+    definition: TOOL_GET_INBOX,
+    execute: wrap(getInbox),
   },
   get_pipeline_runs: {
     definition: TOOL_GET_PIPELINE_RUNS,

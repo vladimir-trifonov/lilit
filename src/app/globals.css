@@ -17,7 +17,7 @@
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   
-  --color-card: var(--surface); /* Mapping card to surface */
+  --color-card: var(--surface);
   --color-card-foreground: var(--foreground);
   
   --color-popover: var(--surface-raised);
@@ -49,11 +49,13 @@
   
   --color-surface: var(--surface);
   --color-surface-raised: var(--surface-raised);
+  --color-surface-floating: var(--surface-floating);
   --color-border-subtle: var(--border-subtle);
   
   --color-brand: var(--brand);
   --color-brand-soft: var(--brand-soft);
   --color-brand-muted: var(--brand-muted);
+  --color-brand-glow: var(--brand-glow);
   
   --color-accent-soft: var(--accent-soft);
   
@@ -70,57 +72,60 @@
   
   --color-faint: var(--faint);
   
-  /* Charts (Optional keep or replace) */
-  --color-chart-1: var(--brand);
-  --color-chart-2: var(--accent);
-  --color-chart-3: var(--success);
-  --color-chart-4: var(--warning);
-  --color-chart-5: var(--info);
-  
   /* Animations */
   --ease-spring-bounce: var(--spring-bounce);
   --ease-spring-snappy: var(--spring-snappy);
+  --ease-spring-slow: var(--spring-slow);
 }
 
 :root {
-  --radius: 0.625rem;
+  --radius: 0.75rem; /* Increased radius for softer look */
   
-  /* Primary Palette */
-  --brand: oklch(0.55 0.20 270);
-  --brand-soft: oklch(0.55 0.20 270 / 15%);
-  --brand-muted: oklch(0.55 0.20 270 / 8%);
+  /* Nebula Palette - Deep Space & Neon */
   
-  --accent: oklch(0.55 0.17 300);
-  --accent-soft: oklch(0.55 0.17 300 / 12%);
+  /* Brand: Electric Blue/Indigo */
+  --brand: oklch(0.65 0.22 260);
+  --brand-soft: oklch(0.65 0.22 260 / 15%);
+  --brand-muted: oklch(0.65 0.22 260 / 8%);
+  --brand-glow: oklch(0.65 0.22 260 / 40%);
   
-  /* Neutral Palette (Dark Mode Default) */
-  --background: oklch(0.13 0.008 270);
-  --surface: oklch(0.18 0.010 270);
-  --surface-raised: oklch(0.22 0.012 270);
-  --sidebar: oklch(0.16 0.010 270);
+  /* Accent: Neon Purple/Pink */
+  --accent: oklch(0.65 0.25 310);
+  --accent-soft: oklch(0.65 0.25 310 / 15%);
   
-  --border: oklch(0.40 0.015 270 / 12%);
-  --border-subtle: oklch(0.40 0.015 270 / 6%);
-  /* Input mostly matches border but can be distinct */
-  --input: oklch(0.40 0.015 270 / 15%);
+  /* Backgrounds: Deep Indigo/Black */
+  --background: oklch(0.12 0.03 260); /* Richer, bluer dark */
+  --sidebar: oklch(0.14 0.03 260 / 0.8);
   
-  --muted: oklch(0.25 0.012 270);
-  --foreground: oklch(0.96 0.005 270);
-  --muted-foreground: oklch(0.60 0.010 270);
-  --faint: oklch(0.45 0.010 270);
+  /* Surfaces: Glassy and Deep */
+  --surface: oklch(0.16 0.03 260 / 0.4);
+  --surface-raised: oklch(0.20 0.04 260 / 0.5);
+  --surface-floating: oklch(0.25 0.04 260 / 0.6);
   
-  /* Semantic Status Colors */
-  --success: oklch(0.65 0.18 155);
-  --success-soft: oklch(0.65 0.18 155 / 12%);
+  --border: oklch(0.70 0.10 260 / 15%);
+  --border-subtle: oklch(0.70 0.10 260 / 8%);
   
-  --warning: oklch(0.75 0.16 80);
-  --warning-soft: oklch(0.75 0.16 80 / 12%);
+  /* Input */
+  --input: oklch(0.25 0.04 260 / 0.5);
+  
+  /* Text */
+  --foreground: oklch(0.98 0.01 260);
+  --muted: oklch(0.30 0.04 260);
+  --muted-foreground: oklch(0.75 0.05 260);
+  --faint: oklch(0.50 0.05 260);
+  
+  /* Semantic Status Colors - slightly more vibrant */
+  --success: oklch(0.70 0.18 150);
+  --success-soft: oklch(0.70 0.18 150 / 15%);
+  
+  --warning: oklch(0.80 0.16 85);
+  --warning-soft: oklch(0.80 0.16 85 / 15%);
   
   --destructive: oklch(0.65 0.22 25);
-  --destructive-soft: oklch(0.65 0.22 25 / 12%);
+  --destructive-soft: oklch(0.65 0.22 25 / 15%);
   
-  --info: oklch(0.65 0.15 230);
-  --info-soft: oklch(0.65 0.15 230 / 12%);
+  --info: oklch(0.70 0.15 230);
+  --info-soft: oklch(0.70 0.15 230 / 15%);
   
   /* Spring Animations */
   --spring-bounce: linear(
@@ -140,6 +145,12 @@
     0, 0.063, 0.233, 0.455, 0.658, 0.810,
     0.907, 0.961, 0.987, 0.998, 1
   );
+
+  --spring-slow: linear(
+    0, 0.006, 0.025, 0.056, 0.100, 0.156,
+    0.225, 0.306, 0.400, 0.506, 0.625,
+    0.756, 0.900, 0.956, 1
+  );
 }
 
 /* Base styles */
@@ -148,80 +159,74 @@
     @apply border-border outline-ring/50;
   }
   ::selection {
-    @apply bg-brand/30 text-white;
+    @apply bg-brand text-white;
   }
   html {
     @apply scroll-smooth;
-    /* Force dark mode colors by default since we mapped them in :root */
     color-scheme: dark;
   }
   body {
     @apply bg-background text-foreground;
     font-synthesis-weight: none;
     text-rendering: optimizeLegibility;
+    @apply antialiased;
   }
-
-  /* Ambient Glow - implemented via pseudo-element on body or a wrapper */
-  /* We can rely on a class .app-glow on layout */
 }
 
 /* Utilities */
 
+/* Nebula Glass Utilities */
 @utility glass {
-  background: oklch(0.18 0.010 270 / 0.55);
-  backdrop-filter: blur(16px) saturate(1.4);
-  -webkit-backdrop-filter: blur(16px) saturate(1.4);
-  border: 1px solid oklch(1 0 0 / 0.06);
-  box-shadow:
-    inset 0 1px 0 0 oklch(1 0 0 / 0.06),
-    inset 0 -1px 0 0 oklch(0 0 0 / 0.1);
+  background: linear-gradient(135deg, rgba(255,255,255,0.03), rgba(255,255,255,0.01));
+  backdrop-filter: blur(16px) saturate(1.8);
+  -webkit-backdrop-filter: blur(16px) saturate(1.8);
+  border: 1px solid rgba(255,255,255,0.08);
+  box-shadow: 0 4px 24px -1px rgba(0, 0, 0, 0.2);
 }
 
 @utility glass-raised {
-  background: oklch(0.22 0.012 270 / 0.65);
-  backdrop-filter: blur(24px) saturate(1.5);
-  -webkit-backdrop-filter: blur(24px) saturate(1.5);
-  border: 1px solid oklch(1 0 0 / 0.08);
-  box-shadow:
-    inset 0 1px 0 0 oklch(1 0 0 / 0.06),
-    inset 0 -1px 0 0 oklch(0 0 0 / 0.1),
-    0 0 0 1px oklch(0 0 0 / 0.3),
-    0 8px 32px oklch(0 0 0 / 0.4);
+  background: linear-gradient(135deg, rgba(255,255,255,0.08), rgba(255,255,255,0.03));
+  backdrop-filter: blur(24px) saturate(2);
+  -webkit-backdrop-filter: blur(24px) saturate(2);
+  border: 1px solid rgba(255,255,255,0.12);
+  box-shadow: 
+    0 8px 32px -4px rgba(0, 0, 0, 0.3),
+    inset 0 1px 0 0 rgba(255,255,255,0.1);
+}
+
+@utility glass-floating {
+  background: oklch(0.20 0.04 260 / 0.7);
+  backdrop-filter: blur(30px) saturate(1.5);
+  -webkit-backdrop-filter: blur(30px) saturate(1.5);
+  border: 1px solid rgba(255,255,255,0.15);
+  box-shadow: 
+    0 20px 40px -8px rgba(0, 0, 0, 0.4),
+    0 0 0 1px rgba(0,0,0,0.1);
 }
 
 @utility glass-subtle {
-  background: oklch(0.16 0.010 270 / 0.40);
-  backdrop-filter: blur(12px) saturate(1.3);
-  -webkit-backdrop-filter: blur(12px) saturate(1.3);
-  border: 1px solid oklch(1 0 0 / 0.04);
+  background: rgba(0,0,0,0.2);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  border-bottom: 1px solid rgba(255,255,255,0.05);
 }
 
 @utility glass-noise {
   position: relative;
-  &::after {
+  &::before {
     content: "";
     position: absolute;
     inset: 0;
-    border-radius: inherit;
-    background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.03'/%3E%3C/svg%3E");
+    z-index: 0;
+    opacity: 0.07;
+    background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noiseFilter'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.65' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noiseFilter)'/%3E%3C/svg%3E");
     pointer-events: none;
     mix-blend-mode: overlay;
   }
 }
 
-@utility no-scrollbar {
-  -ms-overflow-style: none;
-  scrollbar-width: none;
-  &::-webkit-scrollbar {
-    display: none;
-  }
-}
-
-/* Fallbacks for backdrop-filter support */
-@supports not (backdrop-filter: blur(1px)) {
-  .glass { background: var(--surface); }
-  .glass-raised { background: var(--surface-raised); }
-  .glass-subtle { background: var(--sidebar); }
+@utility neon-glow {
+  box-shadow: 0 0 20px -5px var(--brand-glow);
 }
 
 /* Animations from Design System & existing ones */

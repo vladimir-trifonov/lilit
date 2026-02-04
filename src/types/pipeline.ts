@@ -44,8 +44,31 @@ export interface DbTask {
   sequenceOrder: number;
   graphId: string | null; // "t1", "t2" etc.
   dependsOn: string[]; // graph IDs this depends on
+  acceptanceCriteria: string[];
   outputSummary: string | null;
   costUsd: number;
   startedAt: string | null;
   completedAt: string | null;
+}
+
+/** Shape returned by GET /api/pipeline `pastRuns` array (summary only — no tasks) */
+export interface PastRun {
+  runId: string;
+  status: string;
+  userMessage: string;
+  runningCost: number;
+  createdAt: string;
+  updatedAt: string;
+  /** PM plan analysis summary for the collapsed label */
+  planAnalysis?: string | null;
+  /** Number of tasks in this pipeline run */
+  taskCount?: number;
+  /** Persisted log content, lazy-loaded via /api/pipeline/[runId] */
+  logContent?: string | null;
+  /** Tasks for this run, lazy-loaded via /api/pipeline/[runId] */
+  tasks?: DbTask[];
+  /** UI state: whether this run is expanded in the activity log */
+  expanded?: boolean;
+  /** UI state: whether logContent is currently being fetched */
+  loading?: boolean;
 }

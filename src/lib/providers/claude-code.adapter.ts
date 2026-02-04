@@ -1,6 +1,6 @@
 /**
  * Claude Code CLI adapter — file-access provider that spawns `claude -p`.
- * Extracted from claude-code.ts runClaudeCode().
+ * Uses `--output-format stream-json` for live NDJSON streaming.
  */
 
 import { spawn, execSync } from "child_process";
@@ -10,7 +10,14 @@ import path from "path";
 import { CLAUDE_MODELS, DEFAULT_CLAUDE_MODEL } from "../models";
 import { classifyError } from "../errors";
 import { appendLog, isAborted } from "../claude-code";
-import type { ProviderAdapter, ProviderInfo, ExecutionContext, ExecutionResult } from "./types";
+import type {
+  ProviderAdapter,
+  ProviderInfo,
+  ExecutionContext,
+  ExecutionResult,
+  StreamEvent,
+  StreamEventResult,
+} from "./types";
 import {
   CLI_TIMEOUT_MS,
   ABORT_CHECK_INTERVAL_MS,
@@ -19,7 +26,44 @@ import {
   EMPTY_MCP_FILENAME,
   LILIT_MCP_CONFIG_FILENAME,
   LOG_SEPARATOR_LENGTH,
+  STREAM_EVENT_SYSTEM,
+  STREAM_EVENT_ASSISTANT,
+  STREAM_EVENT_RESULT,
+  STREAM_FILTERED_SUBTYPES,
+  TOOL_USE_LOG_PREFIX,
 } from "@/lib/constants";
+
+/** Format a tool_use content block into a readable one-liner for logs. */
+function formatToolUse(name: string, input: Record<string, unknown>): string {
+  switch (name) {
+    case "Read": {
+      const fp = input.file_path ?? input.path ?? "";
+      return `Read ${fp}`;
+    }
+    case "Write": {
+      const fp = input.file_path ?? input.path ?? "";
+      return `Write ${fp}`;
+    }
+    case "Edit": {
+      const fp = input.file_path ?? input.path ?? "";
+      return `Edit ${fp}`;
+    }
+    case "Bash": {
+      const cmd = String(input.command ?? "");
+      return `Bash: ${cmd.length > 120 ? cmd.slice(0, 120) + "…" : cmd}`;
+    }
+    case "Glob": {
+      const pattern = input.pattern ?? "";
+      return `Glob ${pattern}`;
+    }
+    case "Grep": {
+      const pattern = input.pattern ?? "";
+      return `Grep ${pattern}`;
+    }
+    default:
+      return name;
+  }
+}
 
 export const claudeCodeAdapter: ProviderAdapter = {
   id: "claude-code",
@@ -56,14 +100,18 @@ export const claudeCodeAdapter: ProviderAdapter = {
       prompt,
       systemPrompt,
       model = DEFAULT_CLAUDE_MODEL,
-      cwd = process.cwd(),
+      cwd,
       projectId,
       timeoutMs = CLI_TIMEOUT_MS,
       agentLabel = "agent",
     } = ctx;
 
+    if (!cwd) {
+      throw new Error("Claude Code adapter requires an explicit cwd");
+    }
+
     if (projectId && isAborted(projectId)) {
-      if (projectId) appendLog(projectId, `\n[${agentLabel}] Skipped -- pipeline aborted\n`);
+      appendLog(projectId, `\n[${agentLabel}] Skipped -- pipeline aborted\n`);
       return { success: false, output: "", error: "Aborted by user", durationMs: 0 };
     }
 
@@ -112,7 +160,7 @@ export const claudeCodeAdapter: ProviderAdapter = {
     const args = [
       "-p", prompt,
       "--model", model,
-      "--output-format", "text",
+      "--output-format", "stream-json",
       "--verbose",
       "--dangerously-skip-permissions",
       "--mcp-config", mcpConfigPath,
@@ -128,19 +176,81 @@ export const claudeCodeAdapter: ProviderAdapter = {
     }
 
     return new Promise<ExecutionResult>((resolve) => {
-      const stdoutChunks: string[] = [];
+      const outputParts: string[] = [];
       const stderrChunks: string[] = [];
+      let lineBuf = "";
+      let resultEvent: StreamEventResult | undefined;
       let killed = false;
+
       const proc = spawn("claude", args, {
         cwd,
         env: process.env,
         stdio: ["ignore", "pipe", "pipe"],
       });
 
+      /** Process a single NDJSON line from stdout. */
+      function processStreamLine(line: string): void {
+        let event: StreamEvent;
+        try {
+          event = JSON.parse(line) as StreamEvent;
+        } catch {
+          // Not valid JSON — log as raw text fallback
+          if (projectId) appendLog(projectId, line + "\n");
+          return;
+        }
+
+        // Fire optional callback
+        ctx.onStreamEvent?.(event);
+
+        switch (event.type) {
+          case STREAM_EVENT_SYSTEM: {
+            if (STREAM_FILTERED_SUBTYPES.has(event.subtype)) break;
+            // Log notable system events (e.g. init) at debug level
+            if (projectId && event.subtype === "init") {
+              appendLog(projectId, `[system] session initialized\n`);
+            }
+            break;
+          }
+
+          case STREAM_EVENT_ASSISTANT: {
+            const content = event.message?.content;
+            if (!Array.isArray(content)) break;
+
+            for (const block of content) {
+              if (block.type === "text" && block.text) {
+                outputParts.push(block.text);
+                if (projectId) appendLog(projectId, block.text);
+              } else if (block.type === "tool_use") {
+                const desc = formatToolUse(block.name, block.input);
+                if (projectId) {
+                  appendLog(projectId, `\n${TOOL_USE_LOG_PREFIX} ${desc}\n`);
+                }
+              }
+            }
+            break;
+          }
+
+          // tool results can be huge — skip logging them
+          case STREAM_EVENT_RESULT: {
+            resultEvent = event as StreamEventResult;
+            break;
+          }
+
+          // default covers "tool" and any unknown types — ignore
+          default:
+            break;
+        }
+      }
+
       proc.stdout.on("data", (data: Buffer) => {
-        const chunk = data.toString();
-        stdoutChunks.push(chunk);
-        if (projectId) appendLog(projectId, chunk);
+        lineBuf += data.toString();
+        const lines = lineBuf.split("\n");
+        // Last element is either empty (complete line) or a partial fragment
+        lineBuf = lines.pop()!;
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (trimmed) processStreamLine(trimmed);
+        }
       });
 
       proc.stderr.on("data", (data: Buffer) => {
@@ -149,7 +259,7 @@ export const claudeCodeAdapter: ProviderAdapter = {
         if (projectId) appendLog(projectId, `[stderr] ${chunk}`);
       });
 
-      // Periodic abort check (every 3 seconds)
+      // Periodic abort check
       const abortInterval = setInterval(() => {
         if (projectId && isAborted(projectId) && !killed) {
           killed = true;
@@ -173,7 +283,13 @@ export const claudeCodeAdapter: ProviderAdapter = {
         clearTimeout(timeout);
         try { fs.unlinkSync(promptFile); } catch {}
 
-        const stdout = stdoutChunks.join("");
+        // Flush any remaining partial line
+        if (lineBuf.trim()) {
+          processStreamLine(lineBuf.trim());
+          lineBuf = "";
+        }
+
+        const output = outputParts.join("");
         const stderr = stderrChunks.join("");
         const duration = ((Date.now() - startTime) / 1000).toFixed(1);
 
@@ -181,23 +297,28 @@ export const claudeCodeAdapter: ProviderAdapter = {
           appendLog(projectId, `\n[${agentLabel}] Aborted (${duration}s)\n`);
           resolve({
             success: false,
-            output: stdout.trim(),
+            output: output.trim(),
             error: "Aborted by user",
             durationMs: Date.now() - startTime,
           });
           return;
         }
 
-        if (code === 0) {
-          const tokenMatch = stdout.match(/(\d+)in\/(\d+)out/);
-          const tokensUsed = tokenMatch
-            ? { inputTokens: parseInt(tokenMatch[1]), outputTokens: parseInt(tokenMatch[2]) }
-            : undefined;
+        // Extract tokens from the structured result event
+        const tokensUsed = resultEvent?.usage
+          ? {
+              inputTokens: (resultEvent.usage.input_tokens ?? 0)
+                + (resultEvent.usage.cache_creation_input_tokens ?? 0)
+                + (resultEvent.usage.cache_read_input_tokens ?? 0),
+              outputTokens: resultEvent.usage.output_tokens ?? 0,
+            }
+          : undefined;
 
+        if (code === 0) {
           if (projectId) appendLog(projectId, `\n✅ [${agentLabel}] Done (${duration}s)\n`);
           resolve({
             success: true,
-            output: stdout.trim(),
+            output: output.trim(),
             durationMs: Date.now() - startTime,
             tokensUsed,
           });
@@ -205,13 +326,16 @@ export const claudeCodeAdapter: ProviderAdapter = {
           if (stderr && projectId) appendLog(projectId, `\nSTDERR: ${stderr}\n`);
           if (projectId) appendLog(projectId, `\n[${agentLabel}] Failed (${duration}s): exit code ${code}\n`);
 
-          const errorStr = stderr || `Process exited with code ${code}`;
+          const errorStr = resultEvent?.is_error
+            ? (resultEvent.result ?? `Process exited with code ${code}`)
+            : (stderr || `Process exited with code ${code}`);
           resolve({
             success: false,
-            output: stdout.trim(),
+            output: output.trim(),
             error: errorStr,
             errorKind: classifyError(errorStr),
             durationMs: Date.now() - startTime,
+            tokensUsed,
           });
         }
       });

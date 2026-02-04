@@ -1,0 +1,78 @@
+<svg width="1200" height="750" viewBox="0 0 1200 750" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bgA" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#0f1115"/>
+      <stop offset="100%" stop-color="#141821"/>
+    </linearGradient>
+    <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+      <path d="M 40 0 L 0 0 0 40" fill="none" stroke="#1f2430" stroke-width="1" opacity="0.35"/>
+    </pattern>
+    <filter id="softShadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="8" stdDeviation="12" flood-color="#000" flood-opacity="0.35"/>
+    </filter>
+  </defs>
+  <rect width="1200" height="750" fill="url(#bgA)"/>
+  <rect width="1200" height="750" fill="url(#grid)" opacity="0.7"/>
+
+  <!-- Sidebar -->
+  <rect x="24" y="24" width="220" height="702" rx="14" fill="#141923" stroke="#222838"/>
+  <rect x="40" y="44" width="188" height="40" rx="10" fill="#191f2b" stroke="#2a3145"/>
+  <text x="60" y="70" fill="#d7b15f" font-family="Space Grotesk, Arial" font-size="16" font-weight="600">Lilit Mission</text>
+
+  <rect x="40" y="110" width="188" height="44" rx="10" fill="#1a202c" stroke="#2a3145"/>
+  <circle cx="60" cy="132" r="10" fill="#4aaea1"/>
+  <text x="80" y="138" fill="#cfd6e4" font-family="IBM Plex Sans, Arial" font-size="12">Apollo</text>
+
+  <rect x="40" y="168" width="188" height="44" rx="10" fill="#141923" stroke="#232a3b"/>
+  <circle cx="60" cy="190" r="10" fill="#6b7a99"/>
+  <text x="80" y="196" fill="#9aa4b2" font-family="IBM Plex Sans, Arial" font-size="12">Artemis</text>
+
+  <rect x="40" y="226" width="188" height="44" rx="10" fill="#141923" stroke="#232a3b"/>
+  <circle cx="60" cy="248" r="10" fill="#6b7a99"/>
+  <text x="80" y="254" fill="#9aa4b2" font-family="IBM Plex Sans, Arial" font-size="12">Voyager</text>
+
+  <rect x="40" y="666" width="188" height="40" rx="10" fill="#1b2230" stroke="#2a3145"/>
+  <text x="60" y="691" fill="#c69c3f" font-family="Space Grotesk, Arial" font-size="12">+ New Project</text>
+
+  <!-- Main Shell -->
+  <rect x="260" y="24" width="916" height="702" rx="16" fill="#11151d" stroke="#212736"/>
+  <rect x="260" y="24" width="916" height="56" rx="16" fill="#151b26" stroke="#212736"/>
+  <text x="290" y="58" fill="#dfe6f3" font-family="Space Grotesk, Arial" font-size="14" font-weight="600">Apollo / Crew Room</text>
+  <text x="450" y="58" fill="#8b93a7" font-family="IBM Plex Mono, monospace" font-size="12">/Users/vladimir/ai/crew</text>
+
+  <!-- Status dots -->
+  <circle cx="1070" cy="52" r="6" fill="#4aaea1"/>
+  <circle cx="1090" cy="52" r="6" fill="#c69c3f"/>
+  <circle cx="1110" cy="52" r="6" fill="#6b7a99"/>
+
+  <!-- Message column -->
+  <rect x="280" y="96" width="530" height="610" rx="14" fill="#151b26" stroke="#242b3b" filter="url(#softShadow)"/>
+  <text x="300" y="130" fill="#9aa4b2" font-family="IBM Plex Sans, Arial" font-size="11">Standup Summary</text>
+  <rect x="300" y="150" width="490" height="72" rx="12" fill="#1b2230" stroke="#2a3145"/>
+  <text x="318" y="178" fill="#dfe6f3" font-family="IBM Plex Sans, Arial" font-size="13">Pipeline done. 2 tests fixed.</text>
+  <text x="318" y="198" fill="#8b93a7" font-family="IBM Plex Sans, Arial" font-size="11">QA: add loading skeleton for /settings</text>
+
+  <rect x="360" y="246" width="430" height="66" rx="12" fill="#252d3f" stroke="#2f3750"/>
+  <text x="378" y="274" fill="#f4e3b3" font-family="IBM Plex Sans, Arial" font-size="13">Ship new onboarding flow</text>
+  <text x="378" y="294" fill="#c7b47a" font-family="IBM Plex Sans, Arial" font-size="11">User request</text>
+
+  <rect x="300" y="332" width="490" height="90" rx="12" fill="#1b2230" stroke="#2a3145"/>
+  <text x="318" y="360" fill="#dfe6f3" font-family="IBM Plex Sans, Arial" font-size="13">Marcus: prefer single date lib</text>
+  <text x="318" y="382" fill="#8b93a7" font-family="IBM Plex Sans, Arial" font-size="11">Kai: will replace date-fns with dayjs wrapper</text>
+
+  <!-- Log panel -->
+  <rect x="824" y="96" width="332" height="610" rx="14" fill="#141923" stroke="#222838"/>
+  <text x="844" y="130" fill="#c69c3f" font-family="IBM Plex Sans, Arial" font-size="11">Activity Log</text>
+  <rect x="844" y="150" width="292" height="32" rx="8" fill="#1c2230" stroke="#2a3145"/>
+  <text x="860" y="171" fill="#cfd6e4" font-family="IBM Plex Mono, monospace" font-size="11">[Kai] Running tests...</text>
+  <rect x="844" y="190" width="292" height="32" rx="8" fill="#1c2230" stroke="#2a3145"/>
+  <text x="860" y="211" fill="#cfd6e4" font-family="IBM Plex Mono, monospace" font-size="11">[River] 1 failure</text>
+  <rect x="844" y="230" width="292" height="32" rx="8" fill="#1c2230" stroke="#2a3145"/>
+  <text x="860" y="251" fill="#4aaea1" font-family="IBM Plex Mono, monospace" font-size="11">[River] pass</text>
+
+  <!-- Input bar -->
+  <rect x="280" y="676" width="530" height="40" rx="12" fill="#1a202c" stroke="#2a3145"/>
+  <text x="300" y="702" fill="#8b93a7" font-family="IBM Plex Sans, Arial" font-size="12">Tell Lilit what to build...</text>
+  <rect x="720" y="682" width="70" height="28" rx="8" fill="#c69c3f"/>
+  <text x="738" y="702" fill="#11151d" font-family="Space Grotesk, Arial" font-size="12" font-weight="700">Send</text>
+</svg>

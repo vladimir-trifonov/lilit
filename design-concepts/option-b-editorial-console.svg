@@ -1,0 +1,67 @@
+<svg width="1200" height="750" viewBox="0 0 1200 750" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="paper" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#f9f6f2"/>
+      <stop offset="100%" stop-color="#f2eee8"/>
+    </linearGradient>
+    <filter id="cardShadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="6" stdDeviation="10" flood-color="#000" flood-opacity="0.12"/>
+    </filter>
+  </defs>
+  <rect width="1200" height="750" fill="url(#paper)"/>
+
+  <!-- Top bar -->
+  <rect x="24" y="24" width="1152" height="56" rx="12" fill="#ffffff" stroke="#e6e1da" filter="url(#cardShadow)"/>
+  <text x="48" y="58" fill="#1d1d1f" font-family="Fraunces, serif" font-size="18" font-weight="600">Lilit Editorial Console</text>
+  <text x="360" y="58" fill="#6a6762" font-family="Inter Tight, Arial" font-size="12">Project: Apollo / /Users/vladimir/ai/crew</text>
+  <rect x="1030" y="38" width="120" height="28" rx="8" fill="#2b5cff"/>
+  <text x="1066" y="57" fill="#ffffff" font-family="Inter Tight, Arial" font-size="12" font-weight="600">New Run</text>
+
+  <!-- Sidebar -->
+  <rect x="24" y="96" width="240" height="630" rx="12" fill="#ffffff" stroke="#e6e1da" filter="url(#cardShadow)"/>
+  <text x="48" y="132" fill="#1d1d1f" font-family="Fraunces, serif" font-size="16" font-weight="600">Projects</text>
+
+  <rect x="48" y="150" width="192" height="48" rx="10" fill="#f2f0ec" stroke="#e1ded8"/>
+  <text x="64" y="179" fill="#1d1d1f" font-family="Inter Tight, Arial" font-size="12">Apollo</text>
+
+  <rect x="48" y="210" width="192" height="48" rx="10" fill="#ffffff" stroke="#e6e1da"/>
+  <text x="64" y="239" fill="#6a6762" font-family="Inter Tight, Arial" font-size="12">Artemis</text>
+
+  <rect x="48" y="270" width="192" height="48" rx="10" fill="#ffffff" stroke="#e6e1da"/>
+  <text x="64" y="299" fill="#6a6762" font-family="Inter Tight, Arial" font-size="12">Voyager</text>
+
+  <rect x="48" y="666" width="192" height="40" rx="10" fill="#ffffff" stroke="#2b5cff"/>
+  <text x="64" y="692" fill="#2b5cff" font-family="Inter Tight, Arial" font-size="12" font-weight="600">+ New Project</text>
+
+  <!-- Main area -->
+  <rect x="280" y="96" width="896" height="630" rx="12" fill="#ffffff" stroke="#e6e1da" filter="url(#cardShadow)"/>
+
+  <text x="304" y="136" fill="#1d1d1f" font-family="Fraunces, serif" font-size="16" font-weight="600">Crew Messages</text>
+  <text x="460" y="136" fill="#6a6762" font-family="Inter Tight, Arial" font-size="12">Standups, plans, and logs</text>
+
+  <rect x="304" y="160" width="560" height="110" rx="12" fill="#f7f5f1" stroke="#e6e1da"/>
+  <text x="324" y="192" fill="#1d1d1f" font-family="Inter Tight, Arial" font-size="13" font-weight="600">Plan Approved</text>
+  <text x="324" y="214" fill="#6a6762" font-family="Inter Tight, Arial" font-size="12">Sasha: 5 steps, 2 tests, budget $0.18</text>
+  <text x="324" y="236" fill="#6a6762" font-family="Inter Tight, Arial" font-size="12">Marcus: simplify auth boundary</text>
+
+  <rect x="380" y="286" width="484" height="84" rx="12" fill="#ffffff" stroke="#2b5cff"/>
+  <text x="400" y="318" fill="#2b5cff" font-family="Inter Tight, Arial" font-size="12" font-weight="600">User request</text>
+  <text x="400" y="338" fill="#1d1d1f" font-family="Inter Tight, Arial" font-size="13">Improve onboarding copy and flow</text>
+
+  <rect x="304" y="384" width="560" height="96" rx="12" fill="#f7f5f1" stroke="#e6e1da"/>
+  <text x="324" y="418" fill="#1d1d1f" font-family="Inter Tight, Arial" font-size="12" font-weight="600">QA Notes</text>
+  <text x="324" y="440" fill="#6a6762" font-family="Inter Tight, Arial" font-size="12">Add loading state to settings</text>
+
+  <!-- Right panel -->
+  <rect x="884" y="160" width="268" height="520" rx="12" fill="#f7f5f1" stroke="#e6e1da"/>
+  <text x="904" y="196" fill="#1d1d1f" font-family="Inter Tight, Arial" font-size="12" font-weight="600">Activity Log</text>
+  <text x="904" y="222" fill="#6a6762" font-family="JetBrains Mono, monospace" font-size="11">[Kai] Running tests</text>
+  <text x="904" y="246" fill="#6a6762" font-family="JetBrains Mono, monospace" font-size="11">[River] 1 failure</text>
+  <text x="904" y="270" fill="#2b5cff" font-family="JetBrains Mono, monospace" font-size="11">[River] pass</text>
+
+  <!-- Input -->
+  <rect x="304" y="660" width="560" height="40" rx="10" fill="#ffffff" stroke="#e6e1da"/>
+  <text x="324" y="686" fill="#8a8680" font-family="Inter Tight, Arial" font-size="12">Tell Lilit what to build...</text>
+  <rect x="790" y="666" width="74" height="28" rx="8" fill="#1d1d1f"/>
+  <text x="810" y="686" fill="#ffffff" font-family="Inter Tight, Arial" font-size="12" font-weight="600">Send</text>
+</svg>

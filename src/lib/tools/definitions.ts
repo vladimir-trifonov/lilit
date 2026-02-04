@@ -77,7 +77,7 @@ export const TOOL_GET_TASK: ToolDefinition = {
     properties: {
       taskId: {
         type: "string",
-        description: "The task ID (cuid)",
+        description: 'The task ID — either a graph ID like "t1", "t2" or a DB cuid',
       },
     },
     required: ["taskId"],
@@ -142,7 +142,7 @@ export const TOOL_GET_STEP_OUTPUT: ToolDefinition = {
     properties: {
       taskId: {
         type: "string",
-        description: "The task ID whose output to retrieve",
+        description: 'The task ID — either a graph ID like "t1", "t2" or a DB cuid',
       },
     },
     required: ["taskId"],
@@ -165,6 +165,24 @@ export const TOOL_GET_PIPELINE_RUNS: ToolDefinition = {
         type: "string",
         enum: ["running", "awaiting_plan", "completed", "failed", "aborted"],
         description: "Filter by run status",
+      },
+    },
+    required: [],
+  },
+};
+
+export const TOOL_GET_INBOX: ToolDefinition = {
+  name: "get_inbox",
+  description:
+    "Get messages sent to you by other agents during the current pipeline run. " +
+    "Returns questions, flags, suggestions, handoffs, and responses from teammates. " +
+    "Check your inbox at the start of a task to see if other agents left you context.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      pipelineRunId: {
+        type: "string",
+        description: "Pipeline run DB ID. If omitted, returns messages from the most recent run.",
       },
     },
     required: [],

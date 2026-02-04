@@ -14,8 +14,8 @@ import {
   ASSISTANT_MESSAGE_PREVIEW_LENGTH,
   CODE_CHANGES_PREVIEW_LENGTH,
   ISSUES_PREVIEW_LENGTH,
-  FAILED_OUTPUT_PREVIEW_LENGTH,
 } from "@/lib/constants";
+import { extractJSON } from "@/lib/utils";
 
 // ----- Types -----
 
@@ -182,48 +182,37 @@ export function buildStepPrompt(opts: {
   task?: PMPlanTask;
   userMessage: string;
   projectPath: string;
-  eventsContext: string;
-  lastOutput: string;
+  lastOutput?: string;
   plan: PMPlan;
-  memoryContext?: string;
-  inboxContext?: string;
   messageInstructions?: string;
+  /** Graph IDs of dependency tasks — agent can fetch their output via tools. */
+  dependencyTaskIds?: string[];
 }): string {
   const {
     step,
     task,
     userMessage,
     projectPath,
-    eventsContext,
     lastOutput,
     plan,
-    memoryContext,
-    inboxContext,
     messageInstructions,
+    dependencyTaskIds,
   } = opts;
 
   let prompt = `## Project: ${projectPath}\n\n`;
 
   prompt += `## Available Tools\n`;
-  prompt += `You have access to project data tools. Use them when you need context:\n`;
+  prompt += `You have access to project data tools. Use them to pull context on demand — do NOT assume context, fetch what you need:\n`;
   prompt += `- **search_project_history**: Search past messages, events, and memories\n`;
-  prompt += `- **list_tasks** / **get_task**: View tasks and their details\n`;
+  prompt += `- **list_tasks** / **get_task**: View tasks and their details (accepts graph IDs like "t1", "t2")\n`;
   prompt += `- **update_task_status**: Update task status and add notes\n`;
   prompt += `- **get_messages**: Read conversation history (you choose how many)\n`;
-  prompt += `- **get_step_output**: Read full output from any past task\n`;
+  prompt += `- **get_step_output**: Read full output from any past task (accepts graph IDs like "t1", "t2")\n`;
+  prompt += `- **get_inbox**: Read messages from other agents (questions, flags, suggestions) — check at task start\n`;
   prompt += `- **get_pipeline_runs**: View past pipeline execution history\n`;
   prompt += `- **get_project_info**: Get project name, path, and current tech stack\n`;
   prompt += `- **update_project_stack**: Update the project's tech stack identifier\n\n`;
 
-  if (memoryContext) {
-    prompt += `## Relevant Memories\n${memoryContext}\n\n`;
-  }
-
-  if (inboxContext) {
-    prompt += inboxContext + "\n\n";
-  }
-
-  prompt += `## Event History\n${eventsContext}\n\n`;
   prompt += `## Original User Request\n${userMessage}\n\n`;
 
   const agentDef = getAgent(step.agent);
@@ -236,14 +225,26 @@ export function buildStepPrompt(opts: {
     prompt += `## Acceptance Criteria\n${(task.acceptanceCriteria ?? []).map((c) => `- ${c}`).join("\n")}\n\n`;
   }
 
-  if (step.role === "review" && lastOutput) {
-    prompt += `## Code Changes to Review (from Developer)\n${lastOutput.slice(0, CODE_CHANGES_PREVIEW_LENGTH)}\n\n`;
+  if (step.role === "review") {
+    if (lastOutput) {
+      prompt += `## Code Changes to Review (from Developer)\n${lastOutput.slice(0, CODE_CHANGES_PREVIEW_LENGTH)}\n\n`;
+    } else if (dependencyTaskIds && dependencyTaskIds.length > 0) {
+      prompt += `## Code Review\nUse \`get_step_output("${dependencyTaskIds[0]}")\` to fetch the developer's output, then review it.\n\n`;
+    }
     prompt += `Review this code objectively. Output JSON as specified in your instructions.\n`;
   }
 
-  if (step.role === "fix" && lastOutput) {
-    prompt += `## Issues to Fix\n${lastOutput.slice(0, ISSUES_PREVIEW_LENGTH)}\n\n`;
+  if (step.role === "fix") {
+    if (lastOutput) {
+      prompt += `## Issues to Fix\n${lastOutput.slice(0, ISSUES_PREVIEW_LENGTH)}\n\n`;
+    } else if (dependencyTaskIds && dependencyTaskIds.length > 0) {
+      prompt += `## Fix Task\nUse \`get_step_output("${dependencyTaskIds[0]}")\` to fetch the issues identified, then fix them.\n\n`;
+    }
     prompt += `Fix these issues. Report what you changed.\n`;
+  }
+
+  if (dependencyTaskIds && dependencyTaskIds.length > 0 && step.role !== "review" && step.role !== "fix") {
+    prompt += `## Dependencies\nThis task depends on: ${dependencyTaskIds.join(", ")}. Use \`get_step_output\` to inspect their output if needed.\n\n`;
   }
 
   if (roleDef?.receivesPlanContext) {
@@ -258,129 +259,159 @@ export function buildStepPrompt(opts: {
   return prompt;
 }
 
-// ----- Re-evaluation prompt -----
+// ----- PM Plan JSON types -----
 
-export function buildReEvalPrompt(
-  failedStep: PipelineStep,
-  failOutput: string,
-  eventsContext: string,
-  userMessage: string,
-): string {
-  return `## Situation
-Step "${failedStep.agent}${failedStep.role ? `:${failedStep.role}` : ""}" failed or found issues.
-
-## Failed Step Output
-${failOutput.slice(0, FAILED_OUTPUT_PREVIEW_LENGTH)}
-
-## Event History
-${eventsContext}
-
-## Original Request
-${userMessage}
-
-Re-evaluate and create a fix plan following your re-evaluation Markdown format.`;
+interface PMPlanJSON {
+  type: "plan";
+  analysis: string;
+  tasks: Array<{
+    id: string;
+    title: string;
+    agent: string;
+    role: string;
+    description: string;
+    dependsOn: string[];
+    acceptanceCriteria: string[];
+    skills?: string[];
+    provider?: string;
+    model?: string;
+  }>;
 }
 
-// ----- Parsers -----
+interface PMClarificationJSON {
+  type: "clarification";
+  questions: string[];
+}
 
-export function parsePMPlan(raw: string): PMPlan | null {
-  if (raw.includes("## Clarification Needed")) return null;
+interface PMResponseJSON {
+  type: "response";
+  message: string;
+}
 
-  const analysisMatch = raw.match(
-    /## (?:Analysis|Action)\s*\n([\s\S]*?)(?=\n## |$)/,
+type PMPlanOutput = PMPlanJSON | PMClarificationJSON | PMResponseJSON;
+
+// ----- Parser -----
+
+/** Extract PM plan JSON from `[PM_PLAN]...[/PM_PLAN]` markers, with extractJSON fallback. */
+function extractPMPlanJSON(raw: string): PMPlanOutput | null {
+  // Try [PM_PLAN] markers first
+  const blockMatch = raw.match(
+    /\[PM_PLAN\]\s*\n?\s*([\s\S]*?)\s*\n?\s*\[\/PM_PLAN\]/,
   );
-  const analysis = analysisMatch?.[1]?.trim() ?? "";
+  if (blockMatch) {
+    try {
+      return JSON.parse(blockMatch[1]) as PMPlanOutput;
+    } catch {
+      const json = extractJSON(blockMatch[1]);
+      if (json && typeof json === "object" && "type" in json) {
+        return json as PMPlanOutput;
+      }
+    }
+  }
 
-  const pipelineMatch = raw.match(/## Pipeline\s*\n([\s\S]*?)(?=\n## |$)/);
-  if (!pipelineMatch) return null;
+  // Fallback: try extractJSON on the whole output
+  const json = extractJSON(raw);
+  if (json && typeof json === "object" && "type" in json) {
+    return json as PMPlanOutput;
+  }
 
-  const pipelineLine = pipelineMatch[1].trim().split("\n")[0].trim();
-  const pipeline = pipelineLine.split(/\s*→\s*/).filter(Boolean);
-  if (pipeline.length === 0) return null;
+  return null;
+}
 
-  const tasksMatch = raw.match(/## Tasks\s*\n([\s\S]*?)$/);
-  if (!tasksMatch) return null;
-
-  const taskBlocks = tasksMatch[1].split(/### t?\d+\.\s+/).filter(Boolean);
-
-  const tasks: PMPlanTask[] = taskBlocks.map((block, idx) => {
-    const title = block.split("\n")[0]?.trim() ?? `Task ${idx + 1}`;
-    const agent =
-      block.match(/- Agent:\s*(.+)/)?.[1]?.trim() ??
-      pipeline[0]?.split(":")[0] ??
-      "";
-    const role = block.match(/- Role:\s*(.+)/)?.[1]?.trim() ?? "code";
-    const description =
-      block.match(/- Description:\s*(.+)/)?.[1]?.trim() ?? title;
-    const skills = block
-      .match(/- Skills:\s*(.+)/)?.[1]
-      ?.split(",")
-      .map((s) => s.trim())
-      .filter(Boolean);
-    const provider = block.match(/- Provider:\s*(.+)/)?.[1]?.trim();
-    const model = block.match(/- Model:\s*(.+)/)?.[1]?.trim();
-
-    // Parse DependsOn for task graph
-    const dependsOnStr = block.match(/- DependsOn:\s*(.+)/)?.[1]?.trim();
-    const dependsOn = dependsOnStr
-      ? dependsOnStr
-          .split(",")
-          .map((s) => parseInt(s.trim().replace(/^t/i, ""), 10))
-          .filter((n) => !isNaN(n))
-      : [];
-
-    const acMatch = block.match(
-      /- Acceptance Criteria:\s*\n((?:\s+-[^\n]+\n?)*)/,
+/** Parse PM output into a plan, clarification, or conversational response. */
+export function parsePMOutput(raw: string): {
+  plan: PMPlan | null;
+  clarification: string[] | null;
+  response: string | null;
+} {
+  const parsed = extractPMPlanJSON(raw);
+  if (!parsed) {
+    const blockMatch = raw.match(
+      /\[PM_PLAN\]\s*\n?\s*([\s\S]*?)\s*\n?\s*\[\/PM_PLAN\]/,
     );
-    const acceptanceCriteria = acMatch
-      ? (acMatch[1].match(/\s+-\s+(.+)/g) ?? []).map((l) =>
-          l.replace(/^\s+-\s+/, "").trim(),
-        )
-      : [];
+    if (blockMatch) {
+      const inner = blockMatch[1];
+      // Try to salvage clarification questions from malformed JSON
+      if (/"type"\s*:\s*"clarification"/.test(inner)) {
+        const qMatch = inner.match(/"questions"\s*:\s*"((?:[^"\\]|\\.)*)"/);
+        if (qMatch) {
+          return { plan: null, clarification: [qMatch[1]], response: null };
+        }
+      }
+      const msgMatch = inner.match(/"message"\s*:\s*"((?:[^"\\]|\\.)*)"/);
+      if (msgMatch) {
+        return { plan: null, clarification: null, response: msgMatch[1] };
+      }
+      const stripped = raw.replace(/\[PM_PLAN\][\s\S]*?\[\/PM_PLAN\]/g, "").trim();
+      return { plan: null, clarification: null, response: stripped || null };
+    }
+    const trimmed = raw.trim();
+    return { plan: null, clarification: null, response: trimmed || null };
+  }
+
+  if (parsed.type === "response") {
+    return { plan: null, clarification: null, response: parsed.message || null };
+  }
+
+  if (parsed.type === "clarification") {
+    // Runtime guard: PM may output questions as a single string instead of an array
+    const raw_q: unknown = parsed.questions;
+    const arr = Array.isArray(raw_q) ? raw_q as string[] : typeof raw_q === "string" && raw_q.trim() ? [raw_q] : [];
+    const questions = arr.filter((q) => q.trim().length > 0);
+    return { plan: null, clarification: questions.length > 0 ? questions : null, response: null };
+  }
+
+  if (parsed.type === "plan") {
+    if (!parsed.tasks || parsed.tasks.length === 0) {
+      return { plan: null, clarification: null, response: null };
+    }
+
+    // Derive pipeline from task agent:role pairs in order
+    const pipeline = parsed.tasks.map((t) =>
+      t.role ? `${t.agent}:${t.role}` : t.agent,
+    );
+
+    const tasks: PMPlanTask[] = parsed.tasks.map((t, idx) => {
+      // Normalize dependsOn: accept ["t1","t2"] or [1,2]
+      const dependsOn = (t.dependsOn ?? []).map((d) => {
+        const n = parseInt(String(d).replace(/^t/i, ""), 10);
+        return isNaN(n) ? 0 : n;
+      }).filter((n) => n > 0);
+
+      return {
+        id: idx + 1,
+        title: t.title ?? `Task ${idx + 1}`,
+        agent: t.agent ?? "",
+        role: t.role ?? "code",
+        description: t.description ?? t.title ?? "",
+        dependsOn,
+        acceptanceCriteria: t.acceptanceCriteria ?? [],
+        skills: t.skills,
+        provider: t.provider,
+        model: t.model,
+      };
+    });
 
     return {
-      id: idx + 1,
-      title,
-      agent,
-      role,
-      description,
-      skills,
-      provider,
-      model,
-      acceptanceCriteria,
-      dependsOn,
+      plan: { analysis: parsed.analysis ?? "", tasks, pipeline },
+      clarification: null,
+      response: null,
     };
-  });
+  }
 
-  if (tasks.length === 0) return null;
+  return { plan: null, clarification: null, response: null };
+}
 
-  return { analysis, tasks, pipeline };
+// Keep legacy exports for any remaining callers
+export function parsePMPlan(raw: string): PMPlan | null {
+  return parsePMOutput(raw).plan;
 }
 
 export function parseConversationalResponse(raw: string): string | null {
-  const match = raw.match(/## Response\s*\n([\s\S]*?)(?=\n## |$)/);
-  if (!match) return null;
-  const text = match[1].trim();
-  return text.length > 0 ? text : null;
+  return parsePMOutput(raw).response;
 }
 
 export function parseClarification(raw: string): string[] | null {
-  const match = raw.match(
-    /## Clarification Needed\s*\n([\s\S]*?)(?=\n## |$)/,
-  );
-  if (!match) return null;
-
-  const questions = match[1]
-    .split("\n")
-    .map((line) => line.replace(/^-\s+/, "").trim())
-    .filter(Boolean);
-
-  return questions.length > 0 ? questions : null;
+  return parsePMOutput(raw).clarification;
 }
 
-export function parsePipeline(pipeline: string[]): PipelineStep[] {
-  return pipeline.map((entry) => {
-    const [agent, role] = entry.split(":");
-    return { agent, role };
-  });
-}

@@ -31,6 +31,8 @@ import {
   SUMMARY_MAX_WORDS,
 } from "@/lib/constants";
 import crypto from "crypto";
+import path from "path";
+import { CREW_APP_ROOT } from "@/lib/constants";
 
 function appendLog(projectId: string, text: string) {
   rawAppendLog(projectId, text);
@@ -73,6 +75,16 @@ export async function executeOnce(opts: {
   taskHint?: { provider?: string; model?: string; skills?: string[] };
   sessionId?: string;
 }): Promise<ExecuteOnceResult> {
+  const resolvedCwd = path.resolve(path.normalize(opts.cwd));
+  if (
+    resolvedCwd === CREW_APP_ROOT ||
+    CREW_APP_ROOT.startsWith(resolvedCwd + path.sep)
+  ) {
+    throw new Error(
+      `Refusing to execute agent in app directory: ${resolvedCwd} overlaps with ${CREW_APP_ROOT}`,
+    );
+  }
+
   const agentLabel = stepLabel(opts);
   const adapter = getAdapter(opts.provider);
 

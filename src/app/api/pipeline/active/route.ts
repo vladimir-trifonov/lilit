@@ -1,5 +1,6 @@
 import { prisma } from "@/lib/prisma";
 import { NextResponse } from "next/server";
+import { ACTIVE_PIPELINE_LIMIT } from "@/lib/constants";
 
 export const dynamic = "force-dynamic";
 
@@ -17,6 +18,7 @@ export async function GET() {
       projectId: true,
     },
     distinct: ["projectId"],
+    take: ACTIVE_PIPELINE_LIMIT,
   });
 
   return NextResponse.json({

@@ -9,7 +9,7 @@ import {
 export const dynamic = "force-dynamic";
 
 export async function GET() {
-  const registry = getAgentRegistry(true);
+  const registry = getAgentRegistry();
   return NextResponse.json({ agents: registry });
 }
 

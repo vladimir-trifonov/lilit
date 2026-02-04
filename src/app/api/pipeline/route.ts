@@ -4,7 +4,9 @@ import { spawn } from "child_process";
 import path from "path";
 import fs from "fs";
 import os from "os";
-import { MESSAGE_FILE_PREFIX } from "@/lib/constants";
+import { MESSAGE_FILE_PREFIX, PIPELINE_STALE_THRESHOLD_MS, PIPELINE_DEAD_PID_THRESHOLD_MS, PAST_RUNS_LIMIT, TASKS_PER_RUN_LIMIT } from "@/lib/constants";
+import { getPidFile } from "@/lib/claude-code";
+import { cleanupOrphanedRuns } from "@/lib/orphan-cleanup";
 
 export const dynamic = "force-dynamic";
 
@@ -20,6 +22,9 @@ export async function GET(req: Request) {
     return NextResponse.json({ error: "projectId is required" }, { status: 400 });
   }
 
+  // One-time orphan cleanup on first request after server start
+  await cleanupOrphanedRuns();
+
   const run = await prisma.pipelineRun.findFirst({
     where: { projectId },
     orderBy: { updatedAt: "desc" },
@@ -34,6 +39,7 @@ export async function GET(req: Request) {
       userMessage: true,
       conversationId: true,
       runningCost: true,
+      heartbeatAt: true,
       createdAt: true,
       updatedAt: true,
     },
@@ -43,12 +49,54 @@ export async function GET(req: Request) {
     return NextResponse.json({ status: "none" });
   }
 
+  // ── Stale worker detection for "running" pipelines ──
+  let effectiveStatus = run.status;
+
+  if (run.status === "running" || run.status === "awaiting_plan") {
+    const now = Date.now();
+    const lastSignal = run.heartbeatAt ?? run.updatedAt;
+    const heartbeatAge = now - lastSignal.getTime();
+
+    // Check if worker PID is still alive
+    let pidAlive = false;
+    let pidKnown = false;
+    try {
+      const pidStr = fs.readFileSync(getPidFile(projectId), "utf-8").trim();
+      const pid = parseInt(pidStr, 10);
+      if (Number.isFinite(pid) && pid > 0) {
+        pidKnown = true;
+        try {
+          process.kill(pid, 0);
+          pidAlive = true;
+        } catch {}
+      }
+    } catch {}
+
+    // Fast path: PID confirmed dead + heartbeat stale > 2 min
+    const isDeadPid = pidKnown && !pidAlive && heartbeatAge > PIPELINE_DEAD_PID_THRESHOLD_MS;
+    // Slow path: heartbeat stale > 10 min (covers missing PID file, detached workers)
+    const isStaleHeartbeat = heartbeatAge > PIPELINE_STALE_THRESHOLD_MS;
+
+    if (isDeadPid || isStaleHeartbeat) {
+      const reason = isDeadPid
+        ? `Worker process dead (PID not found, no heartbeat for ${Math.round(heartbeatAge / 1000)}s)`
+        : `Worker unresponsive (no heartbeat for ${Math.round(heartbeatAge / 1000)}s)`;
+
+      await prisma.pipelineRun.update({
+        where: { id: run.id },
+        data: { status: "failed", error: reason },
+      });
+      effectiveStatus = "failed";
+    }
+  }
+
   const pipelineSteps = run.pipeline ? JSON.parse(run.pipeline) as string[] : [];
 
   // Fetch tasks for this run
   const tasks = await prisma.task.findMany({
     where: { pipelineRunId: run.id },
     orderBy: { sequenceOrder: "asc" },
+    take: TASKS_PER_RUN_LIMIT,
     select: {
       id: true,
       title: true,
@@ -57,6 +105,9 @@ export async function GET(req: Request) {
       assignedRole: true,
       status: true,
       sequenceOrder: true,
+      graphId: true,
+      dependsOn: true,
+      acceptanceCriteria: true,
       outputSummary: true,
       costUsd: true,
       startedAt: true,
@@ -64,8 +115,45 @@ export async function GET(req: Request) {
     },
   });
 
+  // Fetch past runs — only those with actual tasks (filters out conversational-only runs)
+  const pastRunsCursor = searchParams.get("pastRunsCursor");
+  const pastRunsWhere: Record<string, unknown> = {
+    projectId,
+    id: { not: run.id },
+    tasks: { some: {} },
+  };
+  if (pastRunsCursor) {
+    const cursorDate = new Date(pastRunsCursor);
+    if (!isNaN(cursorDate.getTime())) {
+      pastRunsWhere.updatedAt = { lt: cursorDate };
+    }
+  }
+
+  const pastRunsRaw = await prisma.pipelineRun.findMany({
+    where: pastRunsWhere,
+    orderBy: { updatedAt: "desc" },
+    take: PAST_RUNS_LIMIT + 1,
+    select: {
+      runId: true,
+      status: true,
+      userMessage: true,
+      runningCost: true,
+      plan: true,
+      createdAt: true,
+      updatedAt: true,
+      _count: { select: { tasks: true } },
+    },
+  });
+
+  const hasMorePastRuns = pastRunsRaw.length > PAST_RUNS_LIMIT;
+  if (hasMorePastRuns) pastRunsRaw.pop();
+
+  const nextPastRunsCursor = hasMorePastRuns && pastRunsRaw.length > 0
+    ? pastRunsRaw[pastRunsRaw.length - 1].updatedAt.toISOString()
+    : null;
+
   return NextResponse.json({
-    status: run.status,
+    status: effectiveStatus,
     runId: run.runId,
     currentStep: run.currentStep,
     totalSteps: pipelineSteps.length,
@@ -76,14 +164,35 @@ export async function GET(req: Request) {
     updatedAt: run.updatedAt,
     completedSteps: run.completedSteps ?? null,
     tasks,
-    ...(run.status === "awaiting_plan" && run.plan ? { plan: JSON.parse(run.plan) } : {}),
+    pastRuns: pastRunsRaw.map((pr) => {
+      let planAnalysis: string | null = null;
+      if (pr.plan) {
+        try {
+          const parsed = JSON.parse(pr.plan);
+          planAnalysis = parsed.analysis ?? null;
+        } catch {}
+      }
+      return {
+        runId: pr.runId,
+        status: pr.status,
+        userMessage: pr.userMessage,
+        runningCost: pr.runningCost,
+        planAnalysis,
+        taskCount: pr._count.tasks,
+        createdAt: pr.createdAt,
+        updatedAt: pr.updatedAt,
+      };
+    }),
+    hasMorePastRuns,
+    pastRunsCursor: nextPastRunsCursor,
+    ...(effectiveStatus === "awaiting_plan" && run.plan ? { plan: JSON.parse(run.plan) } : {}),
   });
 }
 
 /**
  * POST /api/pipeline
- * { projectId, action: "resume" | "restart", runId }
- * Spawns a new worker to resume or restart a pipeline.
+ * { projectId, action: "restart", runId }
+ * Spawns a new worker to restart a pipeline with the same user message.
  */
 export async function POST(req: Request) {
   let body;
@@ -101,9 +210,9 @@ export async function POST(req: Request) {
     );
   }
 
-  if (!["resume", "restart"].includes(action)) {
+  if (action !== "restart" && action !== "resume") {
     return NextResponse.json(
-      { error: "action must be resume or restart" },
+      { error: "action must be restart or resume" },
       { status: 400 }
     );
   }
@@ -115,17 +224,44 @@ export async function POST(req: Request) {
   }
 
   const workerScript = path.resolve(process.cwd(), "src/lib/worker.ts");
-  const newRunId = `run-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-
-  // Write message to temp file (same as /api/chat) — worker expects a file path, not raw text
-  const msgFile = path.join(os.tmpdir(), `${MESSAGE_FILE_PREFIX}${newRunId}.txt`);
-  fs.writeFileSync(msgFile, run.userMessage, "utf-8");
 
   if (action === "resume") {
-    // Spawn worker with resumeRunId
+    // Validate the run has saved state for resumption
+    if (!run.plan || !run.taskGraph) {
+      return NextResponse.json(
+        { error: "Cannot resume: run has no saved plan or task graph" },
+        { status: 400 }
+      );
+    }
+    if (run.status !== "aborted" && run.status !== "failed") {
+      return NextResponse.json(
+        { error: "Can only resume aborted or failed runs" },
+        { status: 400 }
+      );
+    }
+
+    // Reset run status and task records for resume
+    await prisma.pipelineRun.update({
+      where: { runId },
+      data: { status: "running", error: null, updatedAt: new Date() },
+    });
+
+    // Reset orphaned in_progress/failed tasks to assigned
+    await prisma.task.updateMany({
+      where: {
+        pipelineRunId: run.id,
+        status: { in: ["in_progress", "failed"] },
+      },
+      data: { status: "assigned", completedAt: null },
+    });
+
+    // Reuse the same runId — write message to temp file
+    const msgFile = path.join(os.tmpdir(), `${MESSAGE_FILE_PREFIX}${runId}.txt`);
+    fs.writeFileSync(msgFile, run.userMessage, "utf-8");
+
     const worker = spawn(
       "bunx",
-      ["tsx", workerScript, projectId, run.conversationId, msgFile, newRunId, runId],
+      ["tsx", workerScript, projectId, run.conversationId, msgFile, runId, "--resume"],
       { cwd: process.cwd(), env: { ...process.env }, detached: true, stdio: "ignore" }
     );
     worker.unref();
@@ -133,22 +269,27 @@ export async function POST(req: Request) {
     return NextResponse.json({
       success: true,
       action: "resume",
-      runId: runId,
-      newRunId,
-    });
-  } else {
-    // Restart: spawn a fresh worker with the same userMessage
-    const worker = spawn(
-      "bunx",
-      ["tsx", workerScript, projectId, run.conversationId, msgFile, newRunId],
-      { cwd: process.cwd(), env: { ...process.env }, detached: true, stdio: "ignore" }
-    );
-    worker.unref();
-
-    return NextResponse.json({
-      success: true,
-      action: "restart",
-      runId: newRunId,
+      runId,
     });
   }
+
+  // action === "restart" — fresh start with new runId
+  const newRunId = `run-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+  // Write message to temp file (same as /api/chat) — worker expects a file path, not raw text
+  const msgFile = path.join(os.tmpdir(), `${MESSAGE_FILE_PREFIX}${newRunId}.txt`);
+  fs.writeFileSync(msgFile, run.userMessage, "utf-8");
+
+  const worker = spawn(
+    "bunx",
+    ["tsx", workerScript, projectId, run.conversationId, msgFile, newRunId],
+    { cwd: process.cwd(), env: { ...process.env }, detached: true, stdio: "ignore" }
+  );
+  worker.unref();
+
+  return NextResponse.json({
+    success: true,
+    action: "restart",
+    runId: newRunId,
+  });
 }

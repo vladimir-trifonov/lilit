@@ -109,37 +109,37 @@ export default function Home() {
   return (
     <>
     {!splashDone && <SplashScreen onComplete={handleSplashComplete} />}
-    <div className="flex h-screen bg-background text-foreground font-sans overflow-hidden">
-      {/* Sidebar */}
+    <div className="flex h-screen w-full bg-transparent font-sans overflow-hidden p-3 gap-3">
+      {/* Floating Sidebar Dock */}
       <aside
-        className={`flex-shrink-0 bg-sidebar/30 backdrop-blur-xl border-r border-border-subtle flex flex-col transition-all duration-300 ease-spring-snappy ${
-          isCollapsed ? "w-[60px]" : "w-[240px]"
+        className={`flex-shrink-0 bg-sidebar backdrop-blur-3xl rounded-3xl border border-white/10 shadow-2xl flex flex-col transition-all duration-500 ease-spring-bounce z-50 ${
+          isCollapsed ? "w-[70px]" : "w-[260px]"
         }`}
       >
-        <div className={`shrink-0 flex items-center h-14 border-b border-border-subtle ${isCollapsed ? "justify-center" : "px-4 justify-between"}`}>
+        <div className={`shrink-0 flex items-center h-16 ${isCollapsed ? "justify-center" : "px-5 justify-between"}`}>
            {isCollapsed ? (
               <Button 
                 variant="ghost" 
                 size="icon" 
                 onClick={() => setIsCollapsed(false)} 
-                className="h-8 w-8 text-muted-foreground hover:text-foreground hover:bg-surface-raised"
+                className="h-10 w-10 text-muted-foreground hover:text-foreground hover:bg-white/5 rounded-full"
               >
-                <ChevronsRight className="h-4 w-4" />
+                <ChevronsRight className="h-5 w-5" />
               </Button>
             ) : (
               <>
-                <div className="overflow-hidden flex items-center gap-2">
-                  <div className="w-5 h-5 rounded bg-brand flex items-center justify-center text-[10px] font-bold text-white shadow-sm shadow-brand/20">L</div>
-                  <div>
-                    <h1 className="text-sm font-semibold tracking-tight text-foreground truncate leading-none">Lilit</h1>
-                    <p className="text-[10px] text-muted-foreground truncate leading-none mt-0.5">AI Crew</p>
+                <div className="overflow-hidden flex items-center gap-3">
+                  <div className="w-8 h-8 rounded-xl bg-gradient-to-br from-brand to-accent flex items-center justify-center text-xs font-bold text-white shadow-lg shadow-brand/20">L</div>
+                  <div className="flex flex-col">
+                    <h1 className="text-base font-bold tracking-tight text-foreground/90 truncate leading-none">Lilit</h1>
+                    <p className="text-[10px] text-muted-foreground/80 font-medium truncate leading-none mt-1">AI Crew</p>
                   </div>
                 </div>
                 <Button 
                   variant="ghost" 
                   size="icon" 
                   onClick={() => setIsCollapsed(true)} 
-                  className="h-7 w-7 text-muted-foreground/70 hover:text-foreground hover:bg-surface-raised"
+                  className="h-8 w-8 text-muted-foreground/50 hover:text-foreground hover:bg-white/5 rounded-full"
                 >
                   <ChevronsLeft className="h-4 w-4" />
                 </Button>
@@ -147,52 +147,64 @@ export default function Home() {
             )}
         </div>
 
-        <ProjectSelector
-          projects={projects}
-          activeProject={activeProject}
-          onSelect={handleSelectProject}
-          onDelete={handleDeleteProject}
-          onNewProjectClick={() => setShowNewProjectModal(true)}
-          isCollapsed={isCollapsed}
-          runningProjectIds={runningProjectIds}
-        />
+        <div className="flex-1 min-h-0 px-2 pb-2">
+          <ProjectSelector
+            projects={projects}
+            activeProject={activeProject}
+            onSelect={handleSelectProject}
+            onDelete={handleDeleteProject}
+            onNewProjectClick={() => setShowNewProjectModal(true)}
+            isCollapsed={isCollapsed}
+            runningProjectIds={runningProjectIds}
+          />
+        </div>
       </aside>
 
-      {/* Main Content */}
-      <main className="flex-1 flex flex-col min-w-0 bg-background/50 relative">
+      {/* Main Content Area */}
+      <main className="flex-1 flex flex-col min-w-0 bg-surface-floating backdrop-blur-3xl rounded-3xl border border-white/10 shadow-2xl overflow-hidden relative transition-all duration-300">
         <ProviderAlert />
         
-        {/* Header */}
-        <header className="h-14 border-b border-border-subtle flex items-center px-6 justify-between bg-surface/30 backdrop-blur-md shrink-0 z-20">
+        {/* Floating Header */}
+        <header className="h-16 absolute top-0 left-0 right-0 z-20 flex items-center px-6 justify-between bg-transparent">
           <div className="flex items-center gap-3">
-            <h2 className="font-medium text-foreground text-sm">
-              {activeProject ? activeProject.name : "Select a Project"}
-            </h2>
+             {activeProject && (
+                <div className="glass px-3 py-1.5 rounded-full border-white/5 flex items-center gap-2 animate-fade-in-scale">
+                    <span className="w-2 h-2 rounded-full bg-success shadow-[0_0_8px_rgba(var(--success),0.5)]" />
+                    <h2 className="font-semibold text-foreground/90 text-sm tracking-wide">
+                      {activeProject.name}
+                    </h2>
+                </div>
+             )}
           </div>
           <div className="flex items-center gap-2">
             {/* Additional header actions can go here */}
           </div>
         </header>
 
-        {/* Chat Interface */}
-        <div className="flex-1 min-h-0 flex flex-col overflow-hidden relative">
+        {/* Chat Interface Container */}
+        <div className="flex-1 flex flex-col pt-16 h-full">
           {activeProject ? (
             <Chat key={activeProject.id} project={activeProject} />
           ) : (
-            <div className="flex h-full flex-col items-center justify-center text-muted-foreground space-y-4">
-              <div className="w-16 h-16 rounded-2xl bg-surface border border-border-subtle flex items-center justify-center text-3xl shadow-lg shadow-black/5">
-                🚀
+            <div className="flex h-full flex-col items-center justify-center text-muted-foreground space-y-6 animate-fade-in-up">
+              <div className="relative">
+                 <div className="absolute inset-0 bg-brand/20 blur-3xl rounded-full" />
+                 <div className="relative w-24 h-24 rounded-3xl bg-gradient-to-br from-surface-raised to-surface border border-white/10 flex items-center justify-center text-5xl shadow-2xl">
+                    🚀
+                 </div>
               </div>
-              <div className="text-center space-y-1">
-                <p className="font-medium text-foreground">No project selected</p>
-                <p className="text-sm">Select or create a project from the sidebar to authorize the crew.</p>
+              <div className="text-center space-y-2 max-w-md px-6">
+                <p className="text-xl font-medium text-foreground">Ready to Launch</p>
+                <p className="text-sm text-muted-foreground/80 leading-relaxed">
+                  Select a project from the dock or create a new one to begin your collaboration with the AI crew.
+                </p>
               </div>
             </div>
           )}
         </div>
       </main>
 
-      {/* New Project Modal - Rendered at root level to avoid sidebar containment */}
+      {/* New Project Modal */}
       {showNewProjectModal && (
         <NewProjectForm
           onSuccess={handleProjectCreated}

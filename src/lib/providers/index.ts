@@ -9,6 +9,11 @@ export type {
   ProviderInfo,
   ExecutionContext,
   ExecutionResult,
+  StreamEvent,
+  StreamEventSystem,
+  StreamEventAssistant,
+  StreamEventTool,
+  StreamEventResult,
 } from "./types";
 
 // Registry
