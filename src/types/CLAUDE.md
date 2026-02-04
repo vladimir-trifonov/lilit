@@ -10,4 +10,14 @@
 | #795 | 8:39 PM | 🔵 | Settings Type System Extension Point | ~384 |
 | #621 | 8:36 PM | 🔵 | Pipeline Type Definitions | ~354 |
 | #455 | 8:33 PM | 🔵 | Project Settings Configuration System | ~395 |
+
+### Feb 4, 2026
+
+| ID | Time | T | Title | Read |
+|----|------|---|-------|------|
+| #1716 | 2:01 AM | 🔵 | Dynamic Orchestration Defaults to True with No UI Toggle | ~563 |
+| #1715 | " | 🔵 | Comprehensive Legacy Code Audit Identifies Sequential Pipeline Remnants Across Codebase | ~748 |
+| #1714 | " | 🔵 | Complete Mapping of Legacy Sequential Pipeline Code vs Dynamic Orchestration | ~753 |
+| #1706 | 1:59 AM | 🔵 | Project Settings System with Dynamic Orchestration Feature Flag | ~601 |
+| #1691 | 1:52 AM | 🔵 | Task Graph Type System Defines Eight Task Statuses and PM Decision Schema | ~569 |
 </claude-mem-context>

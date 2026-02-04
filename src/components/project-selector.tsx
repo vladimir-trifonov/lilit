@@ -161,10 +161,13 @@ export function ProjectSelector({
 
             // Expanded Item
             return (
-              <button
+              <div
                 key={p.id}
+                role="button"
+                tabIndex={0}
                 onClick={() => onSelect(p)}
-                className={`w-full text-left px-3 py-2.5 rounded-lg transition-all duration-200 flex items-center gap-3 group border border-transparent ${
+                onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onSelect(p); } }}
+                className={`w-full text-left px-3 py-2.5 rounded-lg transition-all duration-200 flex items-center gap-3 group border border-transparent cursor-pointer ${
                   isActive
                     ? "bg-surface-raised shadow-sm border-border-subtle"
                     : "hover:bg-surface/50 hover:border-border-subtle"
@@ -194,7 +197,7 @@ export function ProjectSelector({
                     <Trash2 className="h-3.5 w-3.5" />
                   </button>
                 )}
-              </button>
+              </div>
             );
           })}
 

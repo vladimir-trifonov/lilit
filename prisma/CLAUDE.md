@@ -8,4 +8,14 @@
 | ID | Time | T | Title | Read |
 |----|------|---|-------|------|
 | #437 | 8:33 PM | 🔵 | Database Schema for Multi-Agent Orchestration | ~420 |
+
+### Feb 4, 2026
+
+| ID | Time | T | Title | Read |
+|----|------|---|-------|------|
+| #1719 | 2:02 AM | 🔵 | Dead Code Analysis Reveals Unused Sequential Pipeline Infrastructure | ~639 |
+| #1714 | 2:01 AM | 🔵 | Complete Mapping of Legacy Sequential Pipeline Code vs Dynamic Orchestration | ~753 |
+| #1713 | " | 🔵 | PipelineRun Schema Stores Sequential Mode State Fields | ~608 |
+| #1705 | 1:57 AM | 🔵 | Dual Task ID System: PM String IDs vs Database UUIDs with graphId Mapping | ~225 |
+| #1704 | 1:56 AM | 🔵 | Task Database Schema with Prisma ORM Integration | ~590 |
 </claude-mem-context>

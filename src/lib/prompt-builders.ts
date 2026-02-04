@@ -301,7 +301,7 @@ export function parsePMPlan(raw: string): PMPlan | null {
   const tasksMatch = raw.match(/## Tasks\s*\n([\s\S]*?)$/);
   if (!tasksMatch) return null;
 
-  const taskBlocks = tasksMatch[1].split(/### \d+\.\s+/).filter(Boolean);
+  const taskBlocks = tasksMatch[1].split(/### t?\d+\.\s+/).filter(Boolean);
 
   const tasks: PMPlanTask[] = taskBlocks.map((block, idx) => {
     const title = block.split("\n")[0]?.trim() ?? `Task ${idx + 1}`;
@@ -325,7 +325,7 @@ export function parsePMPlan(raw: string): PMPlan | null {
     const dependsOn = dependsOnStr
       ? dependsOnStr
           .split(",")
-          .map((s) => parseInt(s.trim(), 10))
+          .map((s) => parseInt(s.trim().replace(/^t/i, ""), 10))
           .filter((n) => !isNaN(n))
       : [];
 

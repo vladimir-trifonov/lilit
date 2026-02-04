@@ -243,6 +243,7 @@ Visit `http://localhost:3000` to create your first project.
 - [x] Adaptive pipeline (PM modifies plan mid-execution based on live feedback)
 
 **In Progress**
+- [ ] Rename Agents to Team Members in the UI
 - [ ] Use context7 mcp and playwright
 - [ ] Telegram integration
 

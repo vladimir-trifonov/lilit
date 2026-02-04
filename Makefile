@@ -1,4 +1,4 @@
-.PHONY: setup dev stop db-reset build lint format typecheck clean-all watch logs
+.PHONY: setup dev stop db-reset build lint format typecheck clean clean-all watch logs
 
 setup:
 	npm install
@@ -28,6 +28,13 @@ format:
 
 typecheck:
 	npx tsc --noEmit
+
+clean:
+	docker compose down -v
+	docker compose up -d --wait
+	npx prisma db push
+	rm -rf /tmp/lilit
+	rm -rf .next
 
 clean-all:
 	docker compose down -v --rmi all

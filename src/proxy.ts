@@ -5,7 +5,7 @@ import { NextResponse, type NextRequest } from "next/server";
  * Set AUTH_SECRET env var to enable. When unset, all routes are open (local dev).
  * Clients must send: Authorization: Bearer <secret>
  */
-export function middleware(request: NextRequest) {
+export function proxy(request: NextRequest) {
   const secret = process.env.AUTH_SECRET;
   if (!secret) return NextResponse.next();
 

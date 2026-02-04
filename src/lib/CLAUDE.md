@@ -7,26 +7,5 @@
 
 | ID | Time | T | Title | Read |
 |----|------|---|-------|------|
-| #1289 | 11:42 PM | 🔄 | Removed hardcoded Antigravity model pricing entries from cost calculator | ~337 |
-| #1283 | 11:41 PM | 🔵 | Cost calculator implements tiered pricing with free-tier provider strategies | ~493 |
-| #1281 | 11:40 PM | 🔵 | Antigravity models priced at zero cost in cost calculator | ~291 |
-| #1275 | " | 🔵 | Comprehensive constants file with timeouts, limits, and configuration values | ~588 |
-| #1272 | 11:39 PM | 🔵 | Model constants define four AI providers with specific model lists | ~433 |
-| #608 | 8:36 PM | 🔵 | Log Parser for Pipeline Step Extraction | ~401 |
-| #590 | 8:35 PM | 🔵 | Stack Detection System | ~400 |
-| #487 | 8:34 PM | ✅ | PM prompt instruction updated to include conversational response option | ~382 |
-| #467 | 8:33 PM | 🟣 | parseConversationalResponse parser function implemented | ~370 |
-| #452 | " | 🟣 | Orchestrator conversational response handling and abort detection added | ~489 |
-| #413 | " | 🔵 | Worker Process Orchestrator Invocation | ~390 |
-| #360 | 8:32 PM | 🔵 | Skills System for Agent Context Injection | ~425 |
-| #333 | " | 🔵 | Event Logging System for Agent Context | ~387 |
-| #312 | " | 🔵 | Cost Tracking System with Free Tier Support | ~411 |
-| #284 | 8:31 PM | 🔵 | Gemini LLM Integration for Non-Coding Agents | ~356 |
-| #259 | " | 🔵 | Claude Code CLI Execution Infrastructure | ~425 |
-| #257 | " | 🔵 | Claude Code CLI execution with abort handling and live logging | ~646 |
-| #235 | " | 🔵 | Orchestrator Sequential Pipeline Execution Flow | ~471 |
-| #221 | " | 🔵 | File-based plan confirmation gate using polling mechanism | ~589 |
-| #202 | 8:30 PM | 🔵 | Agent Configuration and Role-Based System Prompts | ~423 |
-| #125 | " | 🔵 | Orchestrator pipeline architecture and execution flow | ~803 |
-| #65 | 8:29 PM | 🔵 | Pipeline worker process architecture | ~398 |
+| #235 | 8:31 PM | 🔵 | Orchestrator Sequential Pipeline Execution Flow | ~471 |
 </claude-mem-context>

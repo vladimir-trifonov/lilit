@@ -17,11 +17,12 @@ const INACTIVE_STATUSES = new Set<TaskStatus>([
 ]);
 
 /**
- * Return task IDs where all `dependsOn` are done/skipped and the task is pending.
+ * Return task IDs where all `dependsOn` are done/skipped and the task is pending or ready.
  */
 export function getReadyTasks(graph: TaskGraph): string[] {
   return Object.values(graph.tasks)
     .filter((task) => {
+      if (task.status === "ready") return true;
       if (task.status !== "pending") return false;
       return task.dependsOn.every((depId) => {
         const dep = graph.tasks[depId];

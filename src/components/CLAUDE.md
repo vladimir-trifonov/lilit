@@ -10,4 +10,13 @@
 | #753 | 8:38 PM | 🔵 | Chat Component Real-Time Pipeline Display | ~410 |
 | #738 | " | 🔵 | Settings Panel UI Structure for Configuration Extensions | ~408 |
 | #538 | 8:34 PM | 🔵 | Chat UI Component with Real-Time Pipeline Monitoring | ~403 |
+
+### Feb 4, 2026
+
+| ID | Time | T | Title | Read |
+|----|------|---|-------|------|
+| #1723 | 2:04 AM | 🔵 | Chat Component Displays Legacy Pipeline Adaptation Results in UI | ~534 |
+| #1715 | 2:01 AM | 🔵 | Comprehensive Legacy Code Audit Identifies Sequential Pipeline Remnants Across Codebase | ~748 |
+| #1710 | 2:00 AM | 🔵 | Pipeline Steps Component Supports Both Sequential and Task Graph Rendering Modes | ~590 |
+| #1709 | " | 🔵 | Settings Panel UI Has No Dynamic Orchestration Toggle | ~489 |
 </claude-mem-context>
