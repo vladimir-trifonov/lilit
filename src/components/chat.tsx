@@ -175,7 +175,24 @@ export function Chat({ project }: { project: Project }) {
       {/* Main content area */}
       <div className="flex-1 min-h-0 h-full overflow-hidden relative">
         <ResizablePanelGroup orientation="horizontal">
-          <ResizablePanel defaultSize={showLog ? 60 : 100} minSize={30} className="bg-transparent">
+          <ResizablePanel defaultSize={showLog ? 60 : 100} minSize={30} className="bg-transparent relative">
+            {/* Nebula Background */}
+            <div className="absolute inset-0 -z-10 overflow-hidden pointer-events-none">
+              {/* Deep Space Base */}
+              <div className="absolute inset-0 bg-background/80" />
+              
+              {/* Floating Orbs */}
+              <div className="absolute top-[-20%] left-[-10%] w-[600px] h-[600px] bg-brand/10 rounded-full blur-[120px] animate-blob mix-blend-screen" />
+              <div className="absolute bottom-[-10%] right-[-10%] w-[500px] h-[500px] bg-accent/10 rounded-full blur-[100px] animate-blob animation-delay-4000 mix-blend-screen" />
+              <div className="absolute top-[30%] right-[20%] w-[300px] h-[300px] bg-brand-glow/10 rounded-full blur-[80px] animate-blob animation-delay-2000 mix-blend-screen" />
+              
+              {/* Subtle Grid Pattern */}
+              <div className="absolute inset-0 bg-[url('/grid-pattern.svg')] opacity-[0.03] bg-repeat [mask-image:linear-gradient(to_bottom,transparent,black_20%,black_80%,transparent)]" />
+              
+              {/* Noise Texture */}
+              <div className="absolute inset-0 opacity-[0.02] bg-[url('/noise.png')] mix-blend-overlay" />
+            </div>
+
             {/* Messages */}
             <ScrollArea className="h-full w-full">
               <div ref={scrollContainerRef} className="max-w-4xl mx-auto space-y-6 p-4 md:p-8 min-h-full pb-40">
@@ -383,31 +400,33 @@ export function Chat({ project }: { project: Project }) {
 
                         {/* Past pipeline runs — compact when collapsed, expands when an item is open */}
                         {pipeline.pastRuns.length > 0 && (
-                          <div className={`${historyContainerClass} overflow-auto ${hasCurrentLog && !anyExpanded ? "border-t border-white/5" : ""}`}>
-                            <div className="px-4 py-3 text-[10px] font-medium text-muted-foreground uppercase tracking-wider bg-[#131522] border-b border-white/5 sticky top-0 z-10">
+                          <div className={`${historyContainerClass} flex flex-col ${hasCurrentLog && !anyExpanded ? "border-t border-white/5" : ""}`}>
+                            <div className="px-4 py-3 text-[10px] font-medium text-muted-foreground uppercase tracking-wider bg-[#131522] border-b border-white/5 shrink-0">
                               History
                             </div>
-                            {pipeline.pastRuns.map((run) => (
-                              <PastRunEntry
-                                key={run.runId}
-                                run={run}
-                                useEnhancedLog={useEnhancedLog}
-                                onExpand={pipeline.expandPastRun}
-                                onCollapse={pipeline.collapsePastRun}
-                              />
-                            ))}
-                            {pipeline.hasMorePastRuns && (
-                              <div className="px-3 py-3">
-                                <Button
-                                  variant="ghost"
-                                  size="sm"
-                                  onClick={pipeline.loadMorePastRuns}
-                                  className="w-full text-xs text-muted-foreground hover:bg-white/5"
-                                >
-                                  Load more runs
-                                </Button>
-                              </div>
-                            )}
+                            <div className="flex-1 overflow-auto pb-4" style={{ minHeight: 0 }}>
+                              {pipeline.pastRuns.map((run) => (
+                                <PastRunEntry
+                                  key={run.runId}
+                                  run={run}
+                                  useEnhancedLog={useEnhancedLog}
+                                  onExpand={pipeline.expandPastRun}
+                                  onCollapse={pipeline.collapsePastRun}
+                                />
+                              ))}
+                              {pipeline.hasMorePastRuns && (
+                                <div className="px-3 py-3">
+                                  <Button
+                                    variant="ghost"
+                                    size="sm"
+                                    onClick={pipeline.loadMorePastRuns}
+                                    className="w-full text-xs text-muted-foreground hover:bg-white/5"
+                                  >
+                                    Load more runs
+                                  </Button>
+                                </div>
+                              )}
+                            </div>
                           </div>
                         )}
                       </>

@@ -16,6 +16,8 @@ import {
   ISSUES_PREVIEW_LENGTH,
 } from "@/lib/constants";
 import { extractJSON } from "@/lib/utils";
+import { getGraphSummary } from "./task-graph-engine";
+import type { TaskGraph } from "@/types/task-graph";
 
 // ----- Types -----
 
@@ -152,6 +154,52 @@ ${formatted}
     }
   }
 
+  // Previous pipeline state (aborted/failed runs)
+  let previousPipelineSection = "";
+  if (projectId) {
+    try {
+      const lastAbortedRun = await prisma.pipelineRun.findFirst({
+        where: {
+          projectId,
+          status: { in: ["aborted", "failed"] },
+          taskGraph: { not: null },
+        },
+        orderBy: { updatedAt: "desc" },
+        select: {
+          status: true,
+          userMessage: true,
+          costUsd: true,
+          taskGraph: true,
+        },
+      });
+
+      if (lastAbortedRun?.taskGraph) {
+        const graph = JSON.parse(lastAbortedRun.taskGraph) as TaskGraph;
+        const graphSummary = getGraphSummary(graph);
+        const originalMsg = lastAbortedRun.userMessage
+          ? lastAbortedRun.userMessage.slice(0, 200)
+          : "unknown";
+        const cost = lastAbortedRun.costUsd
+          ? `$${lastAbortedRun.costUsd.toFixed(2)}`
+          : "unknown";
+
+        previousPipelineSection = `## Previous Pipeline State
+The last pipeline was **${lastAbortedRun.status}**.
+Original request: "${originalMsg}"
+Cost spent: ${cost}
+
+Task graph at time of ${lastAbortedRun.status}:
+${graphSummary}
+
+**If the user is asking to continue or resume, plan only the remaining work. Do not re-execute tasks marked [done].**
+
+`;
+      }
+    } catch {
+      // Previous pipeline state is non-fatal
+    }
+  }
+
   return `## Project
 Name: ${projectName}
 Path: ${projectPath}
@@ -169,7 +217,7 @@ ${conversationContext}
 ## Event History
 ${historyContext}
 
-${pipelineMemorySection}## User Request
+${previousPipelineSection}${pipelineMemorySection}## User Request
 ${userMessage}
 
 Respond following the Markdown format from your instructions — either a plan, clarification questions, or a conversational response.`;

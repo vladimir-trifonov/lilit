@@ -4,7 +4,6 @@ import { useRef, useEffect, useCallback } from "react";
 import { createPortal } from "react-dom";
 import { Rnd } from "react-rnd";
 import { Badge } from "@/components/ui/badge";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import { useAgentMessages } from "@/lib/hooks/use-agent-messages";
 import { useLocalStorageState } from "@/lib/hooks/use-local-storage-state";
 import { getAgentIcon, getAgentColor } from "@/lib/agent-style";
@@ -219,19 +218,17 @@ export function TeamChatWindow({ projectId, pipelineLoading, isFocused, onFocus 
         }));
       }}
       style={{ position: "fixed" }}
-      className={`bg-surface-raised border rounded-xl shadow-2xl shadow-black/20 flex flex-col overflow-hidden select-none ${isFocused ? "z-[10000] border-border opacity-100" : "z-[101] border-border opacity-90 hover:opacity-100"}`}
+      className={`bg-surface-raised border rounded-xl shadow-2xl shadow-black/20 flex flex-col overflow-hidden select-none h-full ${isFocused ? "z-[10000] border-border opacity-100" : "z-[101] border-border opacity-90 hover:opacity-100"}`}
       onMouseDownCapture={() => onFocus?.()}
     >
       {/* Title bar — drag handle */}
-      <div className="team-chat-drag-handle flex items-center gap-2.5 h-11 px-3.5 border-b border-border-subtle cursor-grab active:cursor-grabbing shrink-0 glass-subtle sticky top-0 z-20">
-        {/* Agent color dots */}
-        <div className="flex items-center gap-1">
+      <div className="team-chat-drag-handle flex items-center gap-2.5 h-11 px-3.5 border-b border-border-subtle cursor-grab active:cursor-grabbing shrink-0 bg-[#0c0c11] sticky top-0 z-20">
+        <div className="flex h-3 gap-1.5 items-center mr-1 opacity-60 group-hover:opacity-100 transition-opacity">
           {uniqueAgents.slice(0, 4).map((agent) => (
             <div
               key={agent}
               className="w-2.5 h-2.5 rounded-full"
               style={{ backgroundColor: getAgentColor(agent) }}
-              title={agent}
             />
           ))}
         </div>
@@ -267,8 +264,11 @@ export function TeamChatWindow({ projectId, pipelineLoading, isFocused, onFocus 
       </div>
 
       {/* Message list */}
-      <ScrollArea className="flex-1 min-h-0">
-        <div ref={messageContainerRef} className="p-3 space-y-2">
+      <div 
+        ref={messageContainerRef} 
+        className="overflow-y-auto p-3 space-y-2 pr-1 force-visible-scrollbar" 
+        style={{ height: 'calc(100% - 44px)' }}
+      >
           <div ref={topSentinelRef} className="h-px" />
           {loadingMore && (
             <div className="flex items-center justify-center py-2">
@@ -307,15 +307,14 @@ export function TeamChatWindow({ projectId, pipelineLoading, isFocused, onFocus 
                     {formatRelativeTime(msg.createdAt)}
                   </span>
                 </div>
-                <p className="text-xs text-muted-foreground leading-relaxed whitespace-pre-wrap pl-6">
+                <div className="text-xs text-muted-foreground/90 whitespace-pre-wrap break-words leading-relaxed">
                   {msg.content}
-                </p>
+                </div>
               </div>
             );
           })}
-          <div ref={scrollEndRef} />
-        </div>
-      </ScrollArea>
+          <div ref={scrollEndRef} className="h-px" />
+      </div>
     </Rnd>
   );
 

@@ -27,6 +27,7 @@ export const EVENT_TYPES = {
   feedback_routed: "feedback_routed",
   standup_generated: "standup_generated",
   standup_insight: "standup_insight",
+  pipeline_aborted: "pipeline_aborted",
 } as const;
 
 export interface EventData {

@@ -115,13 +115,11 @@ export async function GET(req: Request) {
     },
   });
 
-  // Fetch past runs — only terminal runs with actual tasks
-  // Excludes conversational-only runs, active pipelines, and pending confirmations
+  // Fetch past runs — all terminal runs (including conversational/no-task runs)
   const pastRunsCursor = searchParams.get("pastRunsCursor");
   const pastRunsWhere: Record<string, unknown> = {
     projectId,
     id: { not: run.id },
-    tasks: { some: {} },
     status: { in: ["completed", "failed", "aborted"] },
   };
   if (pastRunsCursor) {

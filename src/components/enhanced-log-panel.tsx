@@ -23,6 +23,18 @@ function chunkLines(lines: string[]): LineChunk[] {
   let i = 0;
   while (i < lines.length) {
     const trimmed = lines[i].trimStart();
+
+    // Filter out system/PM messages (start and end tags)
+    if (
+      trimmed.includes("[PM_") || 
+      trimmed.includes("[/PM_") || 
+      trimmed.includes("[SYSTEM]") || 
+      trimmed.includes("[/SYSTEM]")
+    ) {
+      i++;
+      continue;
+    }
+
     if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
       // Accumulate lines until the JSON block closes (brace counting)
       let depth = 0;
@@ -40,14 +52,8 @@ function chunkLines(lines: string[]): LineChunk[] {
       }
       const raw = jsonLines.join("\n");
       try {
-        const parsed = JSON.parse(raw);
-        let plainText: string | null = null;
-        try {
-          plainText = jsonToPlainText(parsed, { seperator: ":", spacing: true });
-        } catch {
-          // plain text conversion failed — will fall back to JSON view
-        }
-        chunks.push({ type: "json", raw, formatted: JSON.stringify(parsed, null, 2), plainText });
+        JSON.parse(raw);
+        // User requested to hide JSONs from activity logs
         i = j;
         continue;
       } catch {
@@ -156,7 +162,17 @@ export function EnhancedLogPanel({ logContent, loading }: EnhancedLogPanelProps)
     }
   }, [logContent, loading]);
 
-  if (!logContent && !loading) {
+  if (!logContent) {
+    if (loading) {
+      return (
+        <div className="flex flex-col items-center justify-center h-full gap-3 text-muted-foreground text-xs font-mono animate-pulse">
+           <div className="w-8 h-8 rounded-full bg-brand/10 flex items-center justify-center border border-brand/20">
+             <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-brand border-t-transparent" />
+           </div>
+           <span>Initializing pipeline...</span>
+        </div>
+      );
+    }
     return (
       <div className="flex items-center justify-center h-full text-muted-foreground text-xs font-mono">
         No logs yet. Start a pipeline to see output.
