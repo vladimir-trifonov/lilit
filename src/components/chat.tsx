@@ -1,8 +1,9 @@
 "use client";
 
 import { useState, useEffect, useRef, useCallback } from "react";
+import { createPortal } from "react-dom";
 import { useLocalStorageState } from "@/lib/hooks/use-local-storage-state";
-import { SHOW_LOG_KEY, ENHANCED_LOG_KEY } from "@/lib/constants";
+import { SHOW_LOG_KEY, ENHANCED_LOG_KEY, INPUT_POS_KEY } from "@/lib/constants";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -23,6 +24,7 @@ import { PMQuestionCard } from "@/components/pm-question-card";
 import { TeamChatWindow } from "@/components/team-chat-window";
 import ReactMarkdown from "react-markdown";
 import remarkBreaks from "remark-breaks";
+import { Rnd } from "react-rnd";
 
 interface Project {
   id: string;
@@ -35,6 +37,28 @@ export function Chat({ project }: { project: Project }) {
   const [showSettings, setShowSettings] = useState(false);
   const [useEnhancedLog, setUseEnhancedLog] = useLocalStorageState(ENHANCED_LOG_KEY, true);
   const [showAgents, setShowAgents] = useState(false);
+  const [inputPos, setInputPos] = useLocalStorageState<{ x: number; y: number } | null>(INPUT_POS_KEY, null);
+  const [mounted, setMounted] = useState(false);
+  const [focusSource, setFocusSource] = useState<'input' | 'team' | null>(null);
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
+
+  // Global click-away to clear focus
+  useEffect(() => {
+    if (!focusSource) return;
+    const handleClick = (e: MouseEvent) => {
+      // Check if click is outside Rnd/TeamChat containers
+      if (!(e.target as HTMLElement).closest('.react-draggable') && 
+          !(e.target as HTMLElement).closest('.team-chat-drag-handle')) {
+        setFocusSource(null);
+      }
+    };
+    window.addEventListener('mousedown', handleClick);
+    return () => window.removeEventListener('mousedown', handleClick);
+  }, [focusSource]);
+
   const scrollRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const topSentinelRef = useRef<HTMLDivElement>(null);
@@ -280,38 +304,7 @@ export function Chat({ project }: { project: Project }) {
               </div>
             </ScrollArea>
             
-            {/* Input - Levitating Bar */}
-            <div className="absolute bottom-6 left-0 right-0 px-4 md:px-8 z-30 pointer-events-none">
-              <div className="max-w-2xl mx-auto pointer-events-auto">
-                 <div className="glass-floating rounded-[26px] px-2 py-1.5 flex flex-col gap-1.5 relative group focus-within:ring-1 focus-within:ring-brand/50 transition-all duration-300 ease-out max-h-[400px] overflow-hidden opacity-85 hover:opacity-95 group-focus-within:opacity-100 scale-[0.98] group-focus-within:scale-100">
-                    <Textarea
-                      placeholder={pipeline.loading ? "Running..." : "Ask Lilit..."}
-                      value={input}
-                      onChange={(e) => setInput(e.target.value)}
-                      onKeyDown={handleKeyDown}
-                      rows={1}
-                      className="bg-transparent border-none resize-none min-h-[36px] max-h-[300px] overflow-y-auto text-[14px] leading-5 px-4 py-1.5 focus-visible:ring-0 placeholder:text-muted-foreground/50"
-                      style={{ boxShadow: 'none' }}
-                    />
-                    <div className="flex items-center justify-between px-2 pb-1 opacity-80 group-focus-within:opacity-100 transition-opacity">
-                       <div className="flex items-center gap-1">
-                          {/* Future attachments or tools buttons could go here */}
-                       </div>
-                       <Button
-                          onClick={handleSend}
-                          disabled={!input.trim()}
-                          className={`rounded-full w-8 h-8 p-0 flex items-center justify-center transition-all duration-300 ${input.trim() ? "bg-brand text-white shadow-lg shadow-brand/25 scale-100" : "bg-white/5 text-white/20 scale-90"}`}
-                          size="icon"
-                        >
-                          <span className="text-xs">↑</span>
-                        </Button>
-                    </div>
-                    
-                    {/* Glow effect on focus */}
-                    <div className="absolute -inset-px rounded-[29px] bg-gradient-to-r from-brand/50 via-accent/50 to-brand/50 opacity-0 group-focus-within:opacity-100 -z-10 blur-md transition-opacity duration-500" />
-                 </div>
-              </div>
-            </div>
+            {/* Main message area remains */}
 
           </ResizablePanel>
 
@@ -321,7 +314,7 @@ export function Chat({ project }: { project: Project }) {
               <ResizablePanel defaultSize={40} minSize={20} className="backdrop-blur-xl">
                 {/* Log panel (right side) */}
                 <div className="flex flex-col h-full min-h-0">
-                  <div className="h-10 flex items-center px-4 gap-2 shrink-0 border-b border-white/5">
+                  <div className="h-10 flex items-center px-4 gap-2 shrink-0 border-b border-white/5 bg-[#131522] z-20">
                     <span className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">Activity Log</span>
                     {pipeline.currentAgent && (
                       <Badge variant="secondary" className="text-[9px] px-1.5 py-0 bg-brand-soft/50 text-brand-foreground border border-brand/20 animate-pulse ml-2">
@@ -349,69 +342,75 @@ export function Chat({ project }: { project: Project }) {
                     </div>
                   </div>
 
-                  {/* Current pipeline log — scrolls independently, takes remaining space */}
-                  {(pipeline.logContent || pipeline.loading) ? (
-                    <div ref={logPanelRef} className="flex-1 min-h-0 overflow-auto">
-                      {useEnhancedLog ? (
-                        <EnhancedLogPanel
-                          logContent={pipeline.logContent}
-                          loading={pipeline.loading}
-                          currentAgent={pipeline.currentAgent}
-                        />
-                      ) : (
-                        <pre
-                          className="p-4 text-xs text-muted-foreground font-mono whitespace-pre-wrap break-words leading-relaxed"
-                        >
-                          {pipeline.logContent || "Ready..."}
-                        </pre>
-                      )}
-                    </div>
-                  ) : pipeline.pastRuns.length === 0 ? (
-                    <div className="flex-1 min-h-0 overflow-auto">
-                      {useEnhancedLog ? (
-                        <div className="h-full">
-                          <EnhancedLogPanel logContent="" loading={false} currentAgent={null} />
-                        </div>
-                      ) : (
-                        <pre className="flex-1 p-4 text-xs text-muted-foreground font-mono">
-                          Ready...
-                        </pre>
-                      )}
-                    </div>
-                  ) : null}
-
-                  {/* Past pipeline runs — compact when collapsed, expands when an item is open */}
-                  {pipeline.pastRuns.length > 0 && (() => {
+                  {(() => {
                     const hasCurrentLog = !!(pipeline.logContent || pipeline.loading);
                     const anyExpanded = pipeline.pastRuns.some(r => r.expanded);
-                    const sizeClass = !hasCurrentLog || anyExpanded ? "flex-1 min-h-0" : "max-h-[50%]";
+                    const logContentClass = anyExpanded ? "h-0 overflow-hidden" : "flex-1 min-h-0 overflow-auto";
+                    const historyContainerClass = anyExpanded ? "flex-1" : (!hasCurrentLog ? "flex-1" : "max-h-[30%]");
+                    
                     return (
-                    <div className={`${sizeClass} overflow-auto ${hasCurrentLog ? "border-t border-white/5" : ""}`}>
-                      <div className="px-4 py-3 text-[10px] font-medium text-muted-foreground uppercase tracking-wider bg-white/2 sticky top-0 z-10">
-                        History
-                      </div>
-                      {pipeline.pastRuns.map((run) => (
-                        <PastRunEntry
-                          key={run.runId}
-                          run={run}
-                          useEnhancedLog={useEnhancedLog}
-                          onExpand={pipeline.expandPastRun}
-                          onCollapse={pipeline.collapsePastRun}
-                        />
-                      ))}
-                      {pipeline.hasMorePastRuns && (
-                        <div className="px-3 py-3">
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={pipeline.loadMorePastRuns}
-                            className="w-full text-xs text-muted-foreground hover:bg-white/5"
-                          >
-                            Load more runs
-                          </Button>
-                        </div>
-                      )}
-                    </div>
+                      <>
+                        {/* Current pipeline log — scrolls independently, takes remaining space */}
+                        {(pipeline.logContent || pipeline.loading) ? (
+                          <div ref={logPanelRef} className={logContentClass}>
+                            {useEnhancedLog ? (
+                              <EnhancedLogPanel
+                                logContent={pipeline.logContent}
+                                loading={pipeline.loading}
+                                currentAgent={pipeline.currentAgent}
+                              />
+                            ) : (
+                              <pre
+                                className="p-4 text-xs text-muted-foreground font-mono whitespace-pre-wrap break-words leading-relaxed"
+                              >
+                                {pipeline.logContent || "Ready..."}
+                              </pre>
+                            )}
+                          </div>
+                        ) : pipeline.pastRuns.length === 0 ? (
+                          <div className={logContentClass}>
+                            {useEnhancedLog ? (
+                              <div className="h-full">
+                                <EnhancedLogPanel logContent="" loading={false} currentAgent={null} />
+                              </div>
+                            ) : (
+                              <pre className="flex-1 p-4 text-xs text-muted-foreground font-mono">
+                                Ready...
+                              </pre>
+                            )}
+                          </div>
+                        ) : null}
+
+                        {/* Past pipeline runs — compact when collapsed, expands when an item is open */}
+                        {pipeline.pastRuns.length > 0 && (
+                          <div className={`${historyContainerClass} overflow-auto ${hasCurrentLog && !anyExpanded ? "border-t border-white/5" : ""}`}>
+                            <div className="px-4 py-3 text-[10px] font-medium text-muted-foreground uppercase tracking-wider bg-[#131522] border-b border-white/5 sticky top-0 z-10">
+                              History
+                            </div>
+                            {pipeline.pastRuns.map((run) => (
+                              <PastRunEntry
+                                key={run.runId}
+                                run={run}
+                                useEnhancedLog={useEnhancedLog}
+                                onExpand={pipeline.expandPastRun}
+                                onCollapse={pipeline.collapsePastRun}
+                              />
+                            ))}
+                            {pipeline.hasMorePastRuns && (
+                              <div className="px-3 py-3">
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  onClick={pipeline.loadMorePastRuns}
+                                  className="w-full text-xs text-muted-foreground hover:bg-white/5"
+                                >
+                                  Load more runs
+                                </Button>
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </>
                     );
                   })()}
                 </div>
@@ -436,9 +435,70 @@ export function Chat({ project }: { project: Project }) {
 
       {/* Floating Team Chat */}
       <TeamChatWindow
-        pipelineRunId={pipeline.activeRunId}
+        projectId={project.id}
         pipelineLoading={pipeline.loading}
+        isFocused={focusSource === 'team'}
+        onFocus={() => setFocusSource('team')}
       />
+
+
+      {/* Input - Levitating Bar (Draggable & Portal-ed to top level) */}
+      {mounted && createPortal(
+        <Rnd
+          position={inputPos || { 
+            x: (window.innerWidth - 336) / 2, 
+            y: window.innerHeight - 140 
+          }}
+          onDragStart={() => setFocusSource('input')}
+          onDragStop={(_e, d) => setInputPos({ x: d.x, y: d.y })}
+          onPointerDown={() => setFocusSource('input')}
+          enableResizing={false}
+          minWidth={336}
+          maxWidth={336}
+          bounds="window"
+          dragHandleClassName="input-drag-handle"
+          className="z-[9999] !fixed group" // Highest priority
+          style={{ width: 336, height: 'auto' }}
+        >
+          <div className="w-full pointer-events-auto">
+             <div className={`input-drag-handle glass-floating cursor-grab active:cursor-grabbing rounded-[26px] px-2 py-1.5 flex flex-col gap-1.5 relative group focus-within:ring-1 transition-all duration-500 ease-out max-h-[400px] overflow-hidden ${
+               focusSource === 'input' 
+                 ? 'opacity-100 scale-100 ring-brand/50 border-brand' 
+                 : 'opacity-85 hover:opacity-95'
+             } scale-[0.98] group-focus-within:scale-100`}>
+                <Textarea
+                  placeholder={pipeline.loading ? "Running..." : "Ask Lilit..."}
+                  value={input}
+                  onChange={(e) => setInput(e.target.value)}
+                  onKeyDown={handleKeyDown}
+                  onFocus={() => setFocusSource('input')}
+                  rows={1}
+                  className="bg-transparent border-none resize-none min-h-[36px] max-h-[300px] overflow-y-auto text-[14px] leading-5 px-4 py-1.5 focus-visible:ring-0 placeholder:text-muted-foreground/50"
+                  style={{ boxShadow: 'none' }}
+                />
+                <div className="flex items-center justify-between px-2 pb-1 opacity-80 group-focus-within:opacity-100 transition-opacity">
+                   <div className="flex items-center gap-1">
+                      {/* Future attachments or tools buttons could go here */}
+                   </div>
+                   <Button
+                      onClick={handleSend}
+                      disabled={!input.trim()}
+                      className={`rounded-full w-8 h-8 p-0 flex items-center justify-center transition-all duration-300 ${input.trim() ? "bg-brand text-white shadow-lg shadow-brand/25 scale-100" : "bg-white/5 text-white/20 scale-90"}`}
+                      size="icon"
+                    >
+                      <span className="text-xs">↑</span>
+                    </Button>
+                </div>
+                
+                {/* Glow effect on focus */}
+                <div className={`absolute -inset-px rounded-[29px] bg-gradient-to-r from-brand/50 via-accent/50 to-brand/50 -z-10 blur-xl transition-opacity duration-1000 ${
+                  focusSource === 'input' ? 'opacity-100' : 'opacity-0'
+                }`} />
+             </div>
+          </div>
+        </Rnd>,
+        document.body
+      )}
     </>
   );
 }
@@ -699,7 +759,7 @@ function PastRunEntry({
           ) : (
             <>
               {run.tasks && run.tasks.length > 0 && (
-                <div className="px-3 pt-3 pb-1">
+                <div className="px-3 pt-3 pb-3">
                     <PipelineSteps
                       steps={[]}
                       tasks={run.tasks}

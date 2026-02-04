@@ -1,12 +1,15 @@
 /**
- * GET /api/messages — retrieve inter-agent messages for a pipeline run.
+ * GET /api/messages — retrieve inter-agent messages.
  *
  * Query parameters:
- *   - pipelineRunId (string, required)
+ *   - projectId (string) — return messages across all runs for a project
+ *   - pipelineRunId (string) — return messages for a single run (legacy, still supported)
  *   - agent (string, optional) — filter by sender or recipient
  *   - after (ISO string, optional) — only return messages created after this timestamp
  *   - before (ISO string, optional) — backward pagination: messages before this timestamp
  *   - limit (int, optional) — max messages to return (default AGENT_MESSAGE_PAGE_SIZE)
+ *
+ * At least one of projectId or pipelineRunId is required.
  */
 
 import { NextResponse } from "next/server";
@@ -16,8 +19,22 @@ import type { Prisma } from "@prisma/client";
 
 export const dynamic = "force-dynamic";
 
+const MESSAGE_SELECT = {
+  id: true,
+  fromAgent: true,
+  fromRole: true,
+  toAgent: true,
+  messageType: true,
+  content: true,
+  phase: true,
+  parentId: true,
+  createdAt: true,
+  pipelineRunId: true,
+} as const;
+
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
+  const projectId = searchParams.get("projectId");
   const pipelineRunId = searchParams.get("pipelineRunId");
   const agent = searchParams.get("agent");
   const after = searchParams.get("after");
@@ -27,27 +44,34 @@ export async function GET(request: Request) {
     ? Math.min(parseInt(limitParam, 10) || AGENT_MESSAGE_PAGE_SIZE, TEAM_CHAT_MESSAGE_LIMIT)
     : AGENT_MESSAGE_PAGE_SIZE;
 
-  if (!pipelineRunId) {
+  if (!projectId && !pipelineRunId) {
     return NextResponse.json(
-      { error: "pipelineRunId is required" },
+      { error: "projectId or pipelineRunId is required" },
       { status: 400 }
     );
   }
 
-  // Resolve: callers may pass either the DB id (cuid) or the human-readable runId.
-  let resolvedDbId = pipelineRunId;
-  if (pipelineRunId.startsWith("run-")) {
-    const run = await prisma.pipelineRun.findUnique({
-      where: { runId: pipelineRunId },
-      select: { id: true },
-    });
-    if (!run) {
-      return NextResponse.json({ messages: [], total: 0, hasMore: false, nextCursor: null });
-    }
-    resolvedDbId = run.id;
-  }
+  // Build the WHERE clause
+  const where: Prisma.AgentMessageWhereInput = {};
 
-  const where: Prisma.AgentMessageWhereInput = { pipelineRunId: resolvedDbId };
+  if (projectId) {
+    // Project-scoped: join through pipelineRun to filter by projectId
+    where.pipelineRun = { projectId };
+  } else if (pipelineRunId) {
+    // Single-run scoped (legacy path)
+    let resolvedDbId = pipelineRunId;
+    if (pipelineRunId.startsWith("run-")) {
+      const run = await prisma.pipelineRun.findUnique({
+        where: { runId: pipelineRunId },
+        select: { id: true },
+      });
+      if (!run) {
+        return NextResponse.json({ messages: [], total: 0, hasMore: false, nextCursor: null });
+      }
+      resolvedDbId = run.id;
+    }
+    where.pipelineRunId = resolvedDbId;
+  }
 
   if (agent) {
     where.OR = [{ fromAgent: agent }, { toAgent: agent }];
@@ -74,17 +98,7 @@ export async function GET(request: Request) {
       where,
       orderBy: { createdAt: "desc" },
       take: limit + 1,
-      select: {
-        id: true,
-        fromAgent: true,
-        fromRole: true,
-        toAgent: true,
-        messageType: true,
-        content: true,
-        phase: true,
-        parentId: true,
-        createdAt: true,
-      },
+      select: MESSAGE_SELECT,
     });
 
     const hasMore = rows.length > limit;
@@ -101,17 +115,7 @@ export async function GET(request: Request) {
     where,
     orderBy: { createdAt: "asc" },
     take: limit,
-    select: {
-      id: true,
-      fromAgent: true,
-      fromRole: true,
-      toAgent: true,
-      messageType: true,
-      content: true,
-      phase: true,
-      parentId: true,
-      createdAt: true,
-    },
+    select: MESSAGE_SELECT,
   });
 
   return NextResponse.json({ messages, total: messages.length, hasMore: false, nextCursor: null });

@@ -17,13 +17,13 @@ export interface UseAgentMessagesResult {
 }
 
 /**
- * Polls GET /api/messages for real-time agent communications during a pipeline run.
+ * Polls GET /api/messages for real-time agent communications.
+ * Scoped to a project — messages persist across pipeline runs.
  * Deduplicates by message ID to avoid scroll jumps — appends only new messages.
  * Supports backward pagination via loadOlderMessages().
- * Resets when pipelineRunId changes.
  */
 export function useAgentMessages(
-  pipelineRunId: string | null,
+  projectId: string,
   enabled: boolean,
 ): UseAgentMessagesResult {
   const [messages, setMessages] = useState<AgentMessageData[]>([]);
@@ -33,23 +33,11 @@ export function useAgentMessages(
   const seenIdsRef = useRef(new Set<string>());
   const lastTimestampRef = useRef<string | null>(null);
   const oldestTimestampRef = useRef<string | null>(null);
-  const activeRunRef = useRef<string | null>(null);
 
-  const resetAndFetch = useCallback(async () => {
-    if (!pipelineRunId) return;
+  const fetchNewMessages = useCallback(async () => {
+    if (!projectId) return;
 
-    // Detect run change inside the callback (ref access is fine here — event/async context)
-    if (pipelineRunId !== activeRunRef.current) {
-      activeRunRef.current = pipelineRunId;
-      seenIdsRef.current = new Set();
-      lastTimestampRef.current = null;
-      oldestTimestampRef.current = null;
-      setMessages([]);
-      setHasMore(false);
-      setUnread(false);
-    }
-
-    let url = `/api/messages?pipelineRunId=${pipelineRunId}`;
+    let url = `/api/messages?projectId=${projectId}`;
     if (lastTimestampRef.current) {
       url += `&after=${encodeURIComponent(lastTimestampRef.current)}`;
     }
@@ -75,13 +63,13 @@ export function useAgentMessages(
     } catch {
       // ignore — next poll will retry
     }
-  }, [pipelineRunId]);
+  }, [projectId]);
 
   const loadOlderMessages = useCallback(async () => {
-    if (!pipelineRunId || !oldestTimestampRef.current || loadingMore) return;
+    if (!projectId || !oldestTimestampRef.current || loadingMore) return;
     setLoadingMore(true);
     try {
-      const url = `/api/messages?pipelineRunId=${pipelineRunId}&before=${encodeURIComponent(oldestTimestampRef.current)}`;
+      const url = `/api/messages?projectId=${projectId}&before=${encodeURIComponent(oldestTimestampRef.current)}`;
       const res = await apiFetch(url);
       if (!res.ok) return;
       const data = await res.json();
@@ -100,12 +88,12 @@ export function useAgentMessages(
     } finally {
       setLoadingMore(false);
     }
-  }, [pipelineRunId, loadingMore]);
+  }, [projectId, loadingMore]);
 
   usePolling(
-    resetAndFetch,
+    fetchNewMessages,
     TEAM_CHAT_POLL_INTERVAL_MS,
-    enabled && !!pipelineRunId,
+    enabled,
   );
 
   const markRead = useCallback(() => setUnread(false), []);

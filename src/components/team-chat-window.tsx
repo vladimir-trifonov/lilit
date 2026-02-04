@@ -61,8 +61,10 @@ const DEFAULT_STATE: WindowState = {
 };
 
 interface TeamChatWindowProps {
-  pipelineRunId: string | null;
+  projectId: string;
   pipelineLoading: boolean;
+  isFocused?: boolean;
+  onFocus?: () => void;
 }
 
 function formatRelativeTime(dateStr: string): string {
@@ -75,24 +77,24 @@ function formatRelativeTime(dateStr: string): string {
   return `${hours}h ago`;
 }
 
-export function TeamChatWindow({ pipelineRunId, pipelineLoading }: TeamChatWindowProps) {
+export function TeamChatWindow({ projectId, pipelineLoading, isFocused, onFocus }: TeamChatWindowProps) {
   const [windowState, setWindowState] = useLocalStorageState<WindowState>(TEAM_CHAT_STATE_KEY, DEFAULT_STATE);
-  const prevRunIdRef = useRef<string | null>(null);
+  const prevLoadingRef = useRef(false);
   const scrollEndRef = useRef<HTMLDivElement>(null);
   const autoExpandArmedRef = useRef(false);
   const isMounted = typeof window !== "undefined";
 
-  const { messages, unread, hasMore, loadingMore, loadOlderMessages, markRead } = useAgentMessages(pipelineRunId, pipelineLoading);
+  const { messages, unread, hasMore, loadingMore, loadOlderMessages, markRead } = useAgentMessages(projectId, true);
   const topSentinelRef = useRef<HTMLDivElement>(null);
   const messageContainerRef = useRef<HTMLDivElement>(null);
 
-  // Reset state when pipeline run changes
+  // Arm auto-expand when a new pipeline run starts
   useEffect(() => {
-    if (pipelineRunId !== prevRunIdRef.current) {
-      prevRunIdRef.current = pipelineRunId;
+    if (pipelineLoading && !prevLoadingRef.current) {
       autoExpandArmedRef.current = true;
     }
-  }, [pipelineRunId]);
+    prevLoadingRef.current = pipelineLoading;
+  }, [pipelineLoading]);
 
   // Auto-expand once per run when first message arrives
   useEffect(() => {
@@ -170,7 +172,8 @@ export function TeamChatWindow({ pipelineRunId, pipelineLoading }: TeamChatWindo
     const minimized = (
       <button
         onClick={handleExpand}
-        className="fixed bottom-6 right-6 z-[60] flex items-center gap-2 px-4 py-2 bg-surface-raised border border-border rounded-full shadow-lg shadow-black/10 hover:shadow-xl transition-shadow cursor-pointer"
+        onFocus={onFocus}
+        className={`fixed bottom-6 right-6 z-[60] flex items-center gap-2 px-4 py-2 bg-surface-raised border rounded-full shadow-lg shadow-black/10 hover:shadow-xl transition-all duration-300 cursor-pointer ${isFocused ? "border-brand ring-1 ring-brand/50 scale-105" : "border-border"}`}
       >
         <span className="relative flex h-2.5 w-2.5">
           {unread && (
@@ -199,9 +202,13 @@ export function TeamChatWindow({ pipelineRunId, pipelineLoading }: TeamChatWindo
       maxHeight={TEAM_CHAT_MAX_HEIGHT}
       bounds="window"
       dragHandleClassName="team-chat-drag-handle"
+      onDragStart={(_e, d) => {
+        onFocus?.();
+      }}
       onDragStop={(_e, d) => {
         setWindowState((prev) => ({ ...prev, x: d.x, y: d.y }));
       }}
+      onResizeStart={() => onFocus?.()}
       onResizeStop={(_e, _dir, ref, _delta, pos) => {
         setWindowState((prev) => ({
           ...prev,
@@ -212,10 +219,11 @@ export function TeamChatWindow({ pipelineRunId, pipelineLoading }: TeamChatWindo
         }));
       }}
       style={{ position: "fixed" }}
-      className="z-[60] bg-surface-raised border border-border rounded-xl shadow-2xl shadow-black/20 flex flex-col overflow-hidden select-none"
+      className={`bg-surface-raised border rounded-xl shadow-2xl shadow-black/20 flex flex-col overflow-hidden select-none ${isFocused ? "z-[10000] border-border opacity-100" : "z-[101] border-border opacity-90 hover:opacity-100"}`}
+      onMouseDownCapture={() => onFocus?.()}
     >
       {/* Title bar — drag handle */}
-      <div className="team-chat-drag-handle flex items-center gap-2 px-3 py-3 border-b border-border-subtle cursor-grab active:cursor-grabbing shrink-0">
+      <div className="team-chat-drag-handle flex items-center gap-2.5 h-11 px-3.5 border-b border-border-subtle cursor-grab active:cursor-grabbing shrink-0 glass-subtle sticky top-0 z-20">
         {/* Agent color dots */}
         <div className="flex items-center gap-1">
           {uniqueAgents.slice(0, 4).map((agent) => (

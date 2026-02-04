@@ -250,6 +250,7 @@ export const SIDEBAR_COLLAPSED_KEY = "lilit-sidebar-collapsed";
 export const SHOW_LOG_KEY = "lilit-show-log";
 export const ENHANCED_LOG_KEY = "lilit-enhanced-log";
 export const DISMISSED_RUN_KEY_PREFIX = "lilit-dismissed-run-";
+export const INPUT_POS_KEY = "lilit-input-pos";
 
 // ── Debate system ─────────────────────────────────────────────────────────
 
